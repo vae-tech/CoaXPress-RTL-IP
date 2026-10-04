@@ -1,0 +1,1052 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CXP Emulation Guide</title>
+<meta name="description" content="How the CoaXPress emulator works: the C++ host, the FIFO link, the DPI bridge and the RTL camera, with step-by-step transactions and a live packet lab.">
+<style>
+:root {
+  --bg: #f7f7f5; --surface: #ffffff; --surface-2: #f0efeb; --border: #dddbd4;
+  --text: #1f1e1c; --muted: #6b6860; --accent: #2f6fdb; --accent-soft: #e3ecfb;
+  --host: #2f6fdb; --host-soft: #e4edfb;
+  --pipe: #8a5cc7; --pipe-soft: #efe7fa;
+  --bridge: #c7771f; --bridge-soft: #fbeedd;
+  --rtl: #1f8a5c; --rtl-soft: #def3e9;
+  --bench: #b8456b; --bench-soft: #f9e3ea;
+  --warn: #b25b00; --ok: #1f8a5c; --bad: #c0392b;
+  --k: #c0392b; --code-bg: #f3f2ee;
+  --shadow: 0 1px 2px rgba(0,0,0,.05), 0 2px 8px rgba(0,0,0,.04);
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161615; --surface: #1f1f1d; --surface-2: #282826; --border: #3a3935;
+    --text: #ecebe6; --muted: #a09d94; --accent: #7aa7f5; --accent-soft: #22324d;
+    --host: #7aa7f5; --host-soft: #22324d;
+    --pipe: #b995ea; --pipe-soft: #342a44;
+    --bridge: #e7a45a; --bridge-soft: #43321d;
+    --rtl: #5cc79a; --rtl-soft: #1c3a2d;
+    --bench: #e8819f; --bench-soft: #43242f;
+    --warn: #f0a44b; --ok: #5cc79a; --bad: #f07a6c;
+    --k: #f07a6c; --code-bg: #1a1a18;
+    --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161615; --surface: #1f1f1d; --surface-2: #282826; --border: #3a3935;
+  --text: #ecebe6; --muted: #a09d94; --accent: #7aa7f5; --accent-soft: #22324d;
+  --host: #7aa7f5; --host-soft: #22324d;
+  --pipe: #b995ea; --pipe-soft: #342a44;
+  --bridge: #e7a45a; --bridge-soft: #43321d;
+  --rtl: #5cc79a; --rtl-soft: #1c3a2d;
+  --bench: #e8819f; --bench-soft: #43242f;
+  --warn: #f0a44b; --ok: #5cc79a; --bad: #f07a6c;
+  --k: #f07a6c; --code-bg: #1a1a18;
+  --shadow: none;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 64px; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 var(--sans); }
+a { color: var(--accent); }
+code, .mono { font-family: var(--mono); font-size: .9em; }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; border: 1px solid var(--border); }
+header.top { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--bg) 90%, transparent);
+  backdrop-filter: blur(6px); border-bottom: 1px solid var(--border); }
+.top-inner { max-width: 1180px; margin: 0 auto; padding: 10px 16px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.brand { font-weight: 650; letter-spacing: -.01em; white-space: nowrap; }
+nav.toc { display: flex; gap: 2px; flex-wrap: wrap; flex: 1; }
+nav.toc a { color: var(--muted); text-decoration: none; padding: 4px 9px; border-radius: 6px; font-size: 13.5px; }
+nav.toc a:hover, nav.toc a.active { color: var(--text); background: var(--surface-2); }
+.theme-btn { border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 6px; padding: 4px 9px; cursor: pointer; font-size: 13px; }
+main { max-width: 1180px; margin: 0 auto; padding: 0 16px 80px; }
+section { padding-top: 34px; }
+h1 { font-size: 30px; letter-spacing: -.02em; margin: 28px 0 6px; }
+h2 { font-size: 22px; letter-spacing: -.01em; margin: 0 0 6px; }
+h3 { font-size: 16px; margin: 18px 0 6px; }
+.lede { color: var(--muted); max-width: 820px; margin: 0 0 14px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); }
+.pad { padding: 14px 16px; }
+.grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 860px) { .grid3, .grid2 { grid-template-columns: 1fr; } }
+.pill { display: inline-block; white-space: nowrap; font-size: 12px; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); }
+.tag-host { color: var(--host); background: var(--host-soft); border-color: transparent; }
+.tag-pipe { color: var(--pipe); background: var(--pipe-soft); border-color: transparent; }
+.tag-bridge { color: var(--bridge); background: var(--bridge-soft); border-color: transparent; }
+.tag-rtl { color: var(--rtl); background: var(--rtl-soft); border-color: transparent; }
+.tag-bench { color: var(--bench); background: var(--bench-soft); border-color: transparent; }
+.ov h3 { margin-top: 4px; display: flex; gap: 8px; align-items: center; }
+.ov ul { margin: 6px 0 0; padding-left: 18px; }
+.ov li { margin: 2px 0; }
+.callout { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 12px 0; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 12.5px; text-transform: uppercase; letter-spacing: .03em; }
+.tbl-wrap { overflow-x: auto; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.seg button { border: 0; background: transparent; color: var(--muted); padding: 6px 12px; cursor: pointer; font: inherit; font-size: 13.5px; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+/* architecture */
+.arch-wrap { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 12px; }
+@media (max-width: 980px) { .arch-wrap { grid-template-columns: 1fr; } }
+.svg-scroll { overflow-x: auto; }
+.svg-scroll svg { display: block; min-width: 760px; width: 100%; height: auto; }
+.node { cursor: pointer; }
+.node rect { transition: stroke-width .12s, filter .12s; }
+.node:hover rect { stroke-width: 2.4; }
+.node.sel rect { stroke-width: 3; }
+.node text { pointer-events: none; }
+.detail h3 { margin-top: 0; }
+.detail .path { font-family: var(--mono); font-size: 12.5px; color: var(--muted); word-break: break-all; margin-bottom: 8px; }
+.detail ul { padding-left: 18px; margin: 6px 0; }
+/* layers */
+.layer { display: grid; grid-template-columns: 170px 1fr; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.layer:last-child { border-bottom: 0; }
+.layer .lname { font-weight: 600; }
+.layer .lname small { display: block; font-weight: 400; color: var(--muted); }
+@media (max-width: 700px) { .layer { grid-template-columns: 1fr; } }
+.dump { font-family: var(--mono); font-size: 12.5px; background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; overflow-x: auto; white-space: pre; line-height: 1.5; }
+.dump .k { color: var(--k); font-weight: 600; }
+.dump .m { color: var(--muted); }
+.dump .h { color: var(--pipe); }
+/* sequence */
+.seq-wrap { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+@media (max-width: 980px) { .seq-wrap { grid-template-columns: 1fr; } }
+.seq-svg svg { min-width: 620px; }
+.step-row { cursor: pointer; }
+.step-row:hover .row-bg { fill: var(--surface-2); }
+.step-row.cur .row-bg { fill: var(--accent-soft); }
+.ctrls button { border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 6px; padding: 5px 11px; cursor: pointer; font: inherit; font-size: 13.5px; }
+.ctrls button:hover { background: var(--surface-2); }
+.ctrls .ctr { color: var(--muted); font-size: 13px; min-width: 70px; }
+.stepdetail { min-height: 380px; }
+.stepdetail h3 { margin-top: 0; }
+.stepdetail .where { font-size: 12.5px; color: var(--muted); margin-bottom: 8px; }
+.scen-desc { color: var(--muted); margin: 4px 0 0; font-size: 14px; }
+/* lab */
+.lab-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px 14px; }
+.lab-form label.wide { grid-column: span 2; }
+@media (max-width: 520px) { .lab-form label.wide { grid-column: auto; } }
+.lab-form label { display: flex; flex-direction: column; font-size: 12.5px; color: var(--muted); gap: 3px; }
+.lab-form input, .lab-form select { font: inherit; font-size: 14px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; }
+.lab-form input.mono { font-family: var(--mono); }
+.chk { flex-direction: row !important; align-items: center; gap: 6px !important; color: var(--text) !important; font-size: 14px !important; }
+.wtab td { font-family: var(--mono); font-size: 12.5px; }
+.wtab td.f { font-family: var(--sans); font-size: 13px; }
+.wtab tr.kw td:nth-child(2) { color: var(--k); font-weight: 600; }
+.sym { display: inline-block; margin: 2px 6px 2px 0; padding: 3px 6px; border: 1px solid var(--border); border-radius: 5px; background: var(--code-bg); font-family: var(--mono); font-size: 12px; line-height: 1.35; }
+.sym b { display: block; font-size: 11px; font-weight: 600; }
+.sym.k b { color: var(--k); }
+.sym .rd { color: var(--muted); font-size: 10.5px; }
+.badge { display: inline-block; white-space: nowrap; font-size: 12px; padding: 2px 8px; border-radius: 99px; }
+.badge.ok { background: var(--rtl-soft); color: var(--ok); }
+.badge.bad { background: var(--bench-soft); color: var(--bad); }
+.stat { display: flex; gap: 18px; flex-wrap: wrap; font-size: 13.5px; color: var(--muted); }
+.stat b { color: var(--text); font-family: var(--mono); font-weight: 600; }
+/* pipeline */
+.flow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0; }
+.flow .st { border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; background: var(--surface); font-size: 13.5px; }
+.flow .ar { color: var(--muted); }
+details.more { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); margin: 8px 0; }
+details.more summary { cursor: pointer; padding: 8px 12px; font-weight: 600; }
+details.more > div { padding: 0 12px 10px; }
+footer { color: var(--muted); font-size: 13px; margin-top: 40px; border-top: 1px solid var(--border); padding-top: 14px; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-inner">
+    <div class="brand">CXP Emulation Guide</div>
+    <nav class="toc" id="toc">
+      <a href="#overview">Overview</a>
+      <a href="#arch">Structure</a>
+      <a href="#layers">Layers</a>
+      <a href="#tx">Transactions</a>
+      <a href="#lab">Packet lab</a>
+      <a href="#bench">Bench</a>
+      <a href="#validation">Validation</a>
+      <a href="#run">Run</a>
+    </nav>
+    <button class="theme-btn" id="themeBtn" title="Toggle light / dark">◐ Theme</button>
+  </div>
+</header>
+
+<main>
+<!-- ================================================================ OVERVIEW -->
+<section id="overview">
+  <h1>How the emulator works</h1>
+  <p class="lede">The emulator runs the whole CoaXPress 1.1.1 device IP as a camera that a real C++ host talks to.
+  The host (<code>src/emu/host</code>) and the camera exchange framed 32-bit words over two Linux named pipes.
+  The camera is either the RTL, simulated by Verilator behind a DPI-C bridge (<code>src/emu/bridge</code>), or the
+  host's own in-process virtual camera. Both speak the same wire contract, so every CLI command, GUI view and
+  validation case runs unchanged against either.</p>
+
+  <div class="grid3">
+    <div class="card pad ov">
+      <h3><span class="pill tag-host">Host</span> C++17 / Qt</h3>
+      <ul>
+        <li><code>libcxpcore</code>: packet codecs, CRC, FIFO transport, stream parser, GenICam</li>
+        <li><code>cxp</code> CLI: read, write, discover, stream-capture, trace, validate</li>
+        <li><code>cxp-gui</code>: device explorer, image and statistics views, validation window</li>
+        <li>Validation campaign: 166 cases (139 runnable over the link)</li>
+      </ul>
+    </div>
+    <div class="card pad ov">
+      <h3><span class="pill tag-pipe">Link</span> two named pipes</h3>
+      <ul>
+        <li><code>cxp.h2c</code> host → camera, <code>cxp.c2h</code> camera → host</li>
+        <li>Every frame is <code>MAGIC | NWORDS | NWORDS×u32</code>, little-endian</li>
+        <li><code>CXP1</code> word frames (SOP..EOP packets), <code>CXC1</code> characters, <code>CXB1</code> bench ops</li>
+        <li>Resync on an unknown magic, and the pipes reopen when a peer restarts</li>
+      </ul>
+    </div>
+    <div class="card pad ov">
+      <h3><span class="pill tag-rtl">Camera</span> RTL or virtual</h3>
+      <ul>
+        <li><b>RTL</b>: <code>cxp_hw_env.sv</code> wraps <code>cxp_device_top</code>; three 10 ns clocks, run asynchronously</li>
+        <li>Uplink is real: 8B/10B symbols go onto <code>rx_serial</code> one bit at a time</li>
+        <li>Downlink is the parallel word bus <code>cxp_if_data_o/kmask</code>, sampled every <code>tx_clk</code></li>
+        <li><b>vcam</b>: <code>cxp sim</code> / <code>--spawn-sim</code>, fast, but it models the reference camera, not the standard</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout">
+    <b>A register read, in one line:</b> the host builds a Table 21 command → it is wrapped in a <code>CXP1</code> frame on <code>cxp.h2c</code> →
+    the DPI bridge 8B/10B-encodes it and shifts it into the RTL bit by bit → the RTL decodes it, reads the register and sends a Table 22 ack
+    on its word bus → the bridge strips IDLE and wraps the SOP..EOP packet on <code>cxp.c2h</code> → the host checks its CRC and returns the value.
+    The <a href="#tx">Transactions</a> section steps through this with the real words from an RTL run.
+  </div>
+</section>
+
+<!-- ================================================================ ARCHITECTURE -->
+<section id="arch">
+  <h2>Structure</h2>
+  <p class="lede">Click a block to see its role and source files. Switch the camera to see what the in-process virtual camera replaces.</p>
+  <div class="row">
+    <span style="color:var(--muted);font-size:13.5px">Camera:</span>
+    <div class="seg" id="camSeg">
+      <button data-cam="rtl" class="on">RTL (bridge + Verilator)</button>
+      <button data-cam="vcam">Virtual camera (cxp sim)</button>
+    </div>
+  </div>
+  <div class="arch-wrap">
+    <div class="card pad svg-scroll"><svg id="archSvg" viewBox="0 0 900 600" role="img" aria-label="Emulator structure diagram"></svg></div>
+    <div class="card pad detail" id="archDetail"></div>
+  </div>
+</section>
+
+<!-- ================================================================ LAYERS -->
+<section id="layers">
+  <h2>Layers: one read of <code>Standard</code> (0x0000)</h2>
+  <p class="lede">The same command at every layer it crosses on the way into the RTL. The words and the CRC are from the
+  RTL protocol log; the 8B/10B symbols are computed on this page with a port of the bridge's encoder (<code>dpi/cxp_8b10b.h</code>).</p>
+  <div class="card" id="layerStack"></div>
+</section>
+
+<!-- ================================================================ TRANSACTIONS -->
+<section id="tx">
+  <h2>Transactions</h2>
+  <p class="lede">Pick a scenario, then step through it. Click a row in the diagram to jump to that step. Words marked
+  <i>log</i> are copied from the host's protocol log of an RTL run (<code>make emu-rtl</code>).</p>
+  <div class="row">
+    <select id="scenSel" style="font:inherit;padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text)"></select>
+    <div class="ctrls row" style="margin:0">
+      <button id="bPrev">◀ Prev</button>
+      <button id="bNext">Next ▶</button>
+      <button id="bPlay">▶ Play</button>
+      <span class="ctr" id="stepCtr"></span>
+    </div>
+  </div>
+  <p class="scen-desc" id="scenDesc"></p>
+  <div class="seq-wrap" style="margin-top:10px">
+    <div class="card pad svg-scroll seq-svg"><svg id="seqSvg"></svg></div>
+    <div class="card pad stepdetail" id="stepDetail"></div>
+  </div>
+</section>
+
+<!-- ================================================================ LAB -->
+<section id="lab">
+  <h2>Packet lab</h2>
+  <p class="lede">Build a packet and see it the way the host codec (<code>protocol/packets.cpp</code>) lays it out: the words with their fields,
+  the <code>CXP1</code> envelope bytes on the pipe and, for the uplink, the 8B/10B symbols the bridge shifts into <code>rx_serial</code>.
+  <span id="selfTest"></span></p>
+  <div class="card pad">
+    <div class="lab-form">
+      <label class="wide">Packet
+        <select id="lType">
+          <option value="rd">Control command: READ</option>
+          <option value="wr">Control command: WRITE</option>
+          <option value="ackok">Control ack: OK with data (long form)</option>
+          <option value="ackshort">Control ack: short form</option>
+          <option value="stream">Stream packet: first packet of an image</option>
+        </select>
+      </label>
+      <label data-for="rd wr">Address <input id="lAddr" class="mono" value="0x00000000"></label>
+      <label data-for="rd">Size (bytes) <input id="lSize" class="mono" value="4"></label>
+      <label data-for="wr ackok">Value (32-bit) <input id="lVal" class="mono" value="0xC0A79AE5"></label>
+      <label data-for="ackshort">Code
+        <select id="lCode">
+          <option value="1">0x01 WRITE_OK</option>
+          <option value="3">0x03 RESET_OK</option>
+          <option value="64">0x40 invalid address</option>
+          <option value="66">0x42 invalid operation</option>
+          <option value="67">0x43 write protect</option>
+          <option value="69">0x45 bad size</option>
+          <option value="128">0x80 CRC error</option>
+        </select>
+      </label>
+      <label data-for="stream">StreamID <input id="lSid" class="mono" value="1"></label>
+      <label data-for="stream">PacketTag <input id="lTag" class="mono" value="0"></label>
+      <label data-for="stream">Width (Mono8) <input id="lW" class="mono" value="640"></label>
+      <label data-for="stream">Height <input id="lH" class="mono" value="480"></label>
+      <label data-for="stream">SPSM (bytes) <input id="lSpsm" class="mono" value="4096"></label>
+      <label data-for="rd wr ackok" class="chk"><input type="checkbox" id="lBad"> corrupt the CRC</label>
+    </div>
+    <div class="stat" id="labStat" style="margin-top:12px"></div>
+  </div>
+  <div class="grid2" style="margin-top:12px">
+    <div class="card pad">
+      <h3 style="margin-top:0">Words</h3>
+      <div class="tbl-wrap"><table class="wtab" id="labWords"></table></div>
+    </div>
+    <div class="card pad">
+      <h3 style="margin-top:0">On the pipe</h3>
+      <div class="dump" id="labEnv"></div>
+      <h3 id="labSymH">On <code>rx_serial</code></h3>
+      <div id="labSym"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ BENCH -->
+<section id="bench">
+  <h2>Bench: what a lab wires besides the link</h2>
+  <p class="lede">The PyUVM testbench drives more than the link: the trigger input, the pixel port, the extension-link strap,
+  a faulting register bus and the host bit rate. The emulator gives the host the same control through <code>CXB1</code> frames
+  on the same pipes (<code>protocol/bench.h</code>). The bridge applies each op at once in <code>bench_op()</code>, and
+  <code>cxp_hw_env.sv</code> polls the result every clock. A device without a bench skips <code>CXB1</code> as garbage;
+  when <code>HELLO</code> gets no answer, the host treats the device as having no bench.</p>
+  <div class="grid2">
+    <div class="card pad">
+      <h3 style="margin-top:0">Ops (host → bench)</h3>
+      <div class="tbl-wrap"><table id="benchOps"></table></div>
+    </div>
+    <div class="card pad">
+      <h3 style="margin-top:0">Events (bench → host)</h3>
+      <div class="tbl-wrap"><table id="benchEv"></table></div>
+      <h3>Pins</h3>
+      <div class="tbl-wrap"><table id="benchPins"></table></div>
+      <p style="color:var(--muted);font-size:13.5px">A reply is the op code with bit 7 set (<code>op | 0x80</code>). This is why the protocol log
+      prints the unsolicited events as <code>BENCH op 0x92</code> (UPLINK_MARK) and <code>0x93</code> (FRAME_DL) around every control exchange.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ VALIDATION -->
+<section id="validation">
+  <h2>Validation campaign</h2>
+  <p class="lede"><code>cxp validate</code> and the GUI's validation window both drive the same <code>validation::Campaign</code>.
+  <code>make emu-rtl</code> runs every runnable case against the RTL camera and gates the verdicts.</p>
+  <div class="flow">
+    <span class="st"><code>gen_validation_cases.py</code><br><small style="color:var(--muted)">plan .md + verif/ docstrings</small></span><span class="ar">→</span>
+    <span class="st"><code>cxp_validation_cases.json</code><br><small style="color:var(--muted)">catalogue, params, timeout scales</small></span><span class="ar">→</span>
+    <span class="st"><code>Campaign</code> → <code>runCase</code><br><small style="color:var(--muted)">one Context per case</small></span><span class="ar">→</span>
+    <span class="st"><code>cases/&lt;area&gt;/&lt;ID&gt;.cpp</code><br><small style="color:var(--muted)">CXP_CHECK, judged against CXP 1.1.1</small></span><span class="ar">→</span>
+    <span class="st"><code>&lt;ID&gt;.log</code> + <code>results.json</code></span><span class="ar">→</span>
+    <span class="st"><code>tools/check_emu_results.py</code><br><small style="color:var(--muted)">gate, with <code>expected_fail.json</code></small></span>
+  </div>
+  <div class="grid3" style="margin-top:12px">
+    <div class="card pad">
+      <h3 style="margin-top:0">Catalogue</h3>
+      <table>
+        <tr><td>Plan cases (non-electrical)</td><td class="mono">113</td></tr>
+        <tr><td>Emulator-only cases</td><td class="mono">22</td></tr>
+        <tr><td>PyUVM mirrors (<code>UVM-&lt;test&gt;</code>)</td><td class="mono">31</td></tr>
+        <tr><td><b>Runnable over the link</b></td><td class="mono"><b>139 / 166</b></td></tr>
+      </table>
+    </div>
+    <div class="card pad">
+      <h3 style="margin-top:0">What a check can use</h3>
+      <ul style="padding-left:18px;margin:0">
+        <li><code>Context::exchange</code>: a raw command, and its ack (<code>--ack-timeout</code>)</li>
+        <li>Register calls through the GenICam XML (<code>--timeout</code>)</li>
+        <li><code>sleepMs</code> / <code>record</code>, multiplied by the timeout scale</li>
+        <li><code>iparam</code>, <code>ilist</code>, <code>spsmList</code>: the case parameters</li>
+        <li>Bench ops and <code>CXC1</code> character frames</li>
+      </ul>
+    </div>
+    <div class="card pad">
+      <h3 style="margin-top:0">Verdicts</h3>
+      <table>
+        <tr><td><span class="badge ok">PASS</span></td><td>every expectation held</td></tr>
+        <tr><td><span class="badge bad">FAIL</span></td><td>an expectation failed, or a plain access got no answer</td></tr>
+        <tr><td><span class="pill">NOT RUN</span></td><td>the case needs lab hardware or a missing capability</td></tr>
+        <tr><td><span class="pill">ERROR</span></td><td>a host-side fault in the check</td></tr>
+        <tr><td><span class="pill">STOPPED</span></td><td>the user stopped the run</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="callout" style="margin-top:14px">
+    <b>Timing in a simulator.</b> A host test packet crosses the serial uplink bit by bit, so the link-test cases get a timeout
+    scale computed from their packet count (CT-004 runs at ×500). A spec limit that the check measures, such as
+    <code>--ack-latency</code>, is never scaled. After each case the host reads <code>Standard</code>; when it gets no answer, the run
+    reports which case left the device silent.
+  </div>
+</section>
+
+<!-- ================================================================ RUN -->
+<section id="run">
+  <h2>Run it</h2>
+  <div class="grid2">
+    <div class="card pad">
+      <h3 style="margin-top:0">From the repo root</h3>
+<div class="dump">make emu-build                          <span class="m"># bridge (Verilator) + C++ host</span>
+make emu-cli                            <span class="m"># RTL camera, `cxp discover --params`</span>
+make emu-cli CMD="read 0x0000"
+make emu-cli CMD="write 0x10000 320"    <span class="m"># Width</span>
+make emu-cli DEV=vcam CMD="read 0x0000" <span class="m"># same, virtual camera</span>
+make emu-gui                            <span class="m"># device explorer on the RTL</span>
+make emu-cli WAVE=vcd                   <span class="m"># + build/cxp_hw_env.vcd</span>
+make emu-rtl                            <span class="m"># validation campaign, gated (~25 min)</span></div>
+      <p style="color:var(--muted);font-size:13.5px"><code>tools/run_emu.sh</code> starts the camera on a private FIFO pair
+      (<code>/tmp/cxp_emu.XXXXXX</code>), waits for <code>camera RTL running</code> and the pipes, runs the host, and stops the
+      simulator on exit. The camera log goes to <code>src/emu/host/build/emu_logs/camera_&lt;dev&gt;.log</code>.</p>
+    </div>
+    <div class="card pad">
+      <h3 style="margin-top:0">By hand, two terminals</h3>
+<div class="dump"><span class="m"># terminal 1: the camera (runs until Ctrl-C)</span>
+make -C src/emu/bridge run FIFO_DIR=/tmp/cxp
+<span class="m">#   TRACE=1  REGLOG=1  OPT_LEVEL=0  SIM=vsim</span>
+<span class="m">#   WIDTH=128 HEIGHT=64 PIXFMT=0x0101</span>
+<span class="m">#   CXP_HW_DEBUG=1  per-frame stderr trace</span>
+
+<span class="m"># terminal 2: the host</span>
+cxp --fifo-dir /tmp/cxp --protocol-log p.log read 0x0000
+cxp --fifo-dir /tmp/cxp stream-capture --frames 4 --out caps
+cxp --fifo-dir /tmp/cxp trace --pcap cxp.pcap --seconds 2
+cxp --fifo-dir /tmp/cxp validate CT-004 BOOT-002
+cxp-gui --fifo-dir /tmp/cxp</div>
+    </div>
+  </div>
+  <h3>RTL camera or virtual camera</h3>
+  <div class="card tbl-wrap">
+    <table>
+      <tr><th></th><th>RTL (<code>src/emu/bridge</code>)</th><th>Virtual camera (<code>sim/virtual_camera.*</code>)</th></tr>
+      <tr><td>What it is</td><td><code>cxp_device_top</code> in Verilator (or Questa via <code>SIM=vsim</code>)</td><td>C++ model in the host process, or a <code>cxp sim</code> process</td></tr>
+      <tr><td>Uplink</td><td>8B/10B, bit-serial on <code>rx_serial</code>, 160 ns sim time per bit</td><td>whole words</td></tr>
+      <tr><td>Speed</td><td>a control round trip takes ~8–16 ms wall clock (log timestamps)</td><td>instant</td></tr>
+      <tr><td>Bench</td><td>every capability (HELLO reports all bits)</td><td>all but the retired clock op</td></tr>
+      <tr><td>Reference?</td><td>it <i>is</i> the design under test</td><td>no. It mirrors the reference camera, so a FAIL against it is a real gap to the standard</td></tr>
+      <tr><td>Start</td><td><code>make emu-cli</code> / <code>emu-gui</code> / <code>emu-rtl</code></td><td><code>--spawn-sim</code> or <code>DEV=vcam</code></td></tr>
+    </table>
+  </div>
+  <footer>
+    Sources: <code>src/emu/bridge/README.md</code>, <code>src/emu/host/README.md</code>, <code>src/emu/host/src/cxp/protocol/*.h</code>,
+    <code>src/emu/bridge/dpi/cxp_fifo_dpi.c</code>, <code>tb/cxp_hw_env.sv</code>, <code>src/rtl/</code>, and host protocol logs of an RTL
+    validation run. Spec references are CXP-001-2015 (CoaXPress 1.1.1).
+  </footer>
+</section>
+</main>
+
+<script>
+(() => {
+"use strict";
+const $ = (s, r = document) => r.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const hex = (v, n = 8) => (v >>> 0).toString(16).toUpperCase().padStart(n, "0");
+const hx2 = v => hex(v & 0xFF, 2);
+
+/* ---------- theme ---------- */
+try { const t = localStorage.getItem("cxpemu-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+$("#themeBtn").onclick = () => {
+  const cur = document.documentElement.dataset.theme ||
+    (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const nxt = cur === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = nxt;
+  try { localStorage.setItem("cxpemu-theme", nxt); } catch (e) {}
+};
+
+/* ================================================================== codecs */
+// CRC32 (zlib, reflected 0xEDB88320) over words as little-endian bytes; the wire word is ~zlib (crc.h).
+const CRC_T = (() => { const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
+  return t; })();
+function crc32Words(ws) { let c = 0xFFFFFFFF;
+  for (const w of ws) for (let i = 0; i < 4; i++) c = CRC_T[(c ^ (w >>> (8 * i))) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0; }
+const crcWire = ws => (~crc32Words(ws)) >>> 0;
+const bswap = v => (((v & 0xFF) << 24) | ((v & 0xFF00) << 8) | ((v >>> 8) & 0xFF00) | (v >>> 24)) >>> 0;
+const rep = b => ((b & 0xFF) * 0x01010101) >>> 0;
+const SOP = 0xFBFBFBFB, EOP = 0xFDFDFDFD;
+
+function ctrlCmd(op, addr, sizeBytes, data = [], bad = false) {
+  const w0 = (op | ((sizeBytes >>> 16) & 0xFF) << 8 | ((sizeBytes >>> 8) & 0xFF) << 16 | (sizeBytes & 0xFF) << 24) >>> 0;
+  const body = [w0, bswap(addr), ...data];
+  return [SOP, rep(2), ...body, (crcWire(body) ^ (bad ? 0xFFFFFFFF : 0)) >>> 0, EOP];
+}
+function ctrlAck(code, data = [], bad = false) {
+  if (code !== 0 && code !== 4) return [SOP, rep(3), rep(code), EOP];
+  const body = [rep(code), bswap(data.length * 4), ...data];
+  return [SOP, rep(3), ...body, (crcWire(body) ^ (bad ? 0xFFFFFFFF : 0)) >>> 0, EOP];
+}
+
+// 8B/10B: straight port of src/emu/bridge/dpi/cxp_8b10b.h
+const D5 = [[0x27,0x18],[0x1D,0x22],[0x2D,0x12],[0x31,0x31],[0x35,0x0A],[0x29,0x29],[0x19,0x19],[0x38,0x07],
+  [0x39,0x06],[0x25,0x25],[0x15,0x15],[0x34,0x34],[0x0D,0x0D],[0x2C,0x2C],[0x1C,0x1C],[0x17,0x28],
+  [0x1B,0x24],[0x23,0x23],[0x13,0x13],[0x32,0x32],[0x0B,0x0B],[0x2A,0x2A],[0x1A,0x1A],[0x3A,0x05],
+  [0x33,0x0C],[0x26,0x26],[0x16,0x16],[0x36,0x09],[0x0E,0x0E],[0x2E,0x11],[0x1E,0x21],[0x2B,0x14]];
+const D3 = [[0xB,0x4],[0x9,0x9],[0x5,0x5],[0xC,0x3],[0xD,0x2],[0xA,0xA],[0x6,0x6],[0xE,0x1]];
+const KT = {0x1C:[0x0F4,0x30B],0x3C:[0x0F9,0x306],0x5C:[0x0F5,0x30A],0x7C:[0x0F3,0x30C],0x9C:[0x0F2,0x30D],
+  0xBC:[0x0FA,0x305],0xDC:[0x0F6,0x309],0xFC:[0x0F8,0x307],0xF7:[0x3A8,0x057],0xFB:[0x368,0x097],0xFD:[0x2E8,0x117],0xFE:[0x1E8,0x217]};
+const KNAME = {0x1C:"K28.0",0x3C:"K28.1",0x5C:"K28.2",0x7C:"K28.3",0x9C:"K28.4",0xBC:"K28.5",0xDC:"K28.6",0xFC:"K28.7",0xF7:"K23.7",0xFB:"K27.7",0xFD:"K29.7",0xFE:"K30.7"};
+const pop = v => { let c = 0; while (v) { c += v & 1; v >>>= 1; } return c; };
+const m2l = (s, n) => { let o = 0; for (let i = 0; i < n; i++) o |= ((s >>> (n - 1 - i)) & 1) << i; return o; };
+function rdAfter(f, n, rd) { const d = 2 * pop(f) - n; if (d > 0) return 1; if (d < 0) return 0;
+  if ((n === 6 && f === 0x07) || (n === 4 && f === 0x3)) return 1;
+  if ((n === 6 && f === 0x38) || (n === 4 && f === 0xC)) return 0; return rd; }
+function enc8b10b(data, k, st) {
+  data &= 0xFF;
+  if (k && KT[data]) { const msb = KT[data][st.rd & 1], ones = pop(msb);
+    if (ones === 6) st.rd = 1; else if (ones === 4) st.rd = 0; return m2l(msb, 10); }
+  const x = data & 0x1F, y = (data >>> 5) & 7;
+  const s6 = D5[x][st.rd & 1]; const mid = rdAfter(s6, 6, st.rd);
+  let s4 = D3[y][mid & 1];
+  if (y === 7 && ((mid === 0 && (x === 17 || x === 18 || x === 20)) || (mid === 1 && (x === 11 || x === 13 || x === 14)))) s4 = mid ? 0x8 : 0x7;
+  st.rd = rdAfter(s4, 4, mid);
+  return m2l(s6, 6) | (m2l(s4, 4) << 6);
+}
+const symBits = s => { let o = ""; for (let b = 0; b < 10; b++) { o += (s >>> b) & 1; if (b === 5) o += " "; } return o; };
+const dname = v => "D" + (v & 0x1F) + "." + ((v >>> 5) & 7);
+
+// Characters a CXP1 frame puts on the uplink (frameChars / frame_kmask): first word's K27.7 lanes and last
+// word's K29.7 lanes are K when at least 3 of 4 match; everything else is data.
+function frameChars(ws) {
+  const out = [];
+  ws.forEach((w, i) => {
+    let km = 0;
+    const lanes = kb => { let m = 0; for (let l = 0; l < 4; l++) if (((w >>> (8 * l)) & 0xFF) === kb) m |= 1 << l; return m; };
+    if (i === 0) { const m = lanes(0xFB); if (pop(m) >= 3) km = m; }
+    if (i === ws.length - 1) { const m = lanes(0xFD); if (pop(m) >= 3) km |= m; }
+    for (let l = 0; l < 4; l++) out.push({ v: (w >>> (8 * l)) & 0xFF, k: !!((km >>> l) & 1) });
+  });
+  return out;
+}
+function envelopeBytes(ws, magic = 0x43585031) {
+  const all = [magic, ws.length, ...ws], b = [];
+  for (const w of all) for (let i = 0; i < 4; i++) b.push((w >>> (8 * i)) & 0xFF);
+  return b;
+}
+function envDump(ws, magic = 0x43585031, maxWords = 12) {
+  const b = envelopeBytes(ws, magic), lines = [];
+  const mname = { 0x43585031: "CXP1", 0x43584331: "CXC1", 0x43584231: "CXB1" }[magic];
+  lines.push(`<span class="h">${b.slice(0, 4).map(hx2).join(" ")}</span>  <span class="m">MAGIC '${mname}'</span>`);
+  lines.push(`<span class="h">${b.slice(4, 8).map(hx2).join(" ")}</span>  <span class="m">NWORDS ${ws.length}</span>`);
+  const n = Math.min(ws.length, maxWords);
+  for (let i = 0; i < n; i++) lines.push(b.slice(8 + 4 * i, 12 + 4 * i).map(hx2).join(" ") + `  <span class="m">w${i} = ${hex(ws[i])}</span>`);
+  if (ws.length > n) lines.push(`<span class="m">… ${ws.length - n} more words</span>`);
+  return lines.join("\n");
+}
+function wordsDump(ws, perLine = 8, kIdx = []) {
+  const out = [];
+  for (let i = 0; i < ws.length; i += perLine)
+    out.push(ws.slice(i, i + perLine).map((w, j) => {
+      const s = hex(w), idx = i + j;
+      return (kIdx.includes(idx) || w === SOP || w === EOP || w === 0x7C7C7C7C) ? `<span class="k">${s}</span>` : s;
+    }).join(" "));
+  return out.join("\n");
+}
+function charsDump(cs) {
+  return cs.map(c => c.k ? `<span class="k">K.${hx2(c.v)}</span>` : hx2(c.v)).join(" ");
+}
+
+// Rectangular image header (Table 38, cxp_app_image_header.sv) + one line marker (Table 39).
+function rectHeader(o) {
+  const b3 = v => [(v >>> 16) & 0xFF, (v >>> 8) & 0xFF, v & 0xFF];
+  const bytes = [0x01, o.sid, (o.stag >>> 8) & 0xFF, o.stag & 0xFF, ...b3(o.w), ...b3(o.xo), ...b3(o.h), ...b3(o.yo),
+    ...b3(o.dsizel), (o.pixf >>> 8) & 0xFF, o.pixf & 0xFF, 0, 0, o.flags || 0];
+  return [0x7C7C7C7C, ...bytes.map(rep)];
+}
+
+/* ================================================================== self test */
+(function selfTest() {
+  const rd0 = ctrlCmd(0, 0, 4);
+  const st = { rd: 0 };
+  const k277 = symBits(enc8b10b(0xFB, true, st));
+  const ack = ctrlAck(0, [bswap(0xC0A79AE5)]), wr = ctrlCmd(1, 0x4010, 4, [bswap(4096)]);
+  const ok = rd0[4] === 0x6F5D8656 && ack[5] === 0x801E4ED4 && wr[5] === 0x6719AB4C && k277 === "110110 1000";
+  $("#selfTest").innerHTML = ok
+    ? `<span class="badge ok" title="read of 0x0000 → CRC 6F5D8656 (§8.2.2.2 example), its ack → 801E4ED4, write 0x4010=4096 → 6719AB4C, all as in the RTL log; K27.7 at RD− = 110110 1000 as cxp_8b10b.h">self-check passed: CRC and 8B/10B match the RTL log and the bridge</span>`
+    : `<span class="badge bad">self-check FAILED: CRC ${hex(rd0[4])} / K27.7 ${k277}</span>`;
+})();
+
+/* ================================================================== architecture */
+const ARCH = {
+  apps:   { x: 20,  y: 40,  w: 200, h: 60, c: "host", t: "cxp · cxp-gui · validate", s: "apps/cli, apps/gui, validation/",
+    title: "Host applications", path: "src/emu/host/apps/cli/main.cpp · apps/gui/ · src/cxp/validation/",
+    body: ["<code>cxp</code>: discover, read / write, stream-capture, image-extract, compliance, trace (pcap), xml-parse, validate, sim.",
+      "<code>cxp-gui</code>: register tree from the XML, image and statistics windows, the validation plan window (Ctrl+Shift+V). Device I/O runs on a one-slot worker (<code>IoBridge</code>), stream traffic on a drain thread (<code>LinkStats</code>).",
+      "Validation: <code>Campaign</code> → <code>runCase</code> → one <code>cases/&lt;area&gt;/&lt;ID&gt;.cpp</code> per case."] },
+  client: { x: 20,  y: 130, w: 200, h: 60, c: "host", t: "CameraControl · Session", s: "camera/client, session",
+    title: "Camera client and session", path: "src/emu/host/src/cxp/camera/client.* · session.* · protocol_log.*",
+    body: ["<code>Session</code> owns the FIFO pair and, with <code>--spawn-sim</code>, an in-process virtual camera. The CLI, the GUI and the tests share it.",
+      "<code>CameraControl</code>: discovery, blocking register calls serialised by a mutex, and a receive-dispatch thread that routes each downlink frame by <code>peekType()</code>. Acks wake the waiting call; stream and event packets go to the parser.",
+      "<code>--protocol-log FILE</code> writes every frame sent and received, decoded and timestamped. The log lines on this page come from it."] },
+  codec:  { x: 20,  y: 220, w: 200, h: 60, c: "host", t: "protocol codecs", s: "packets · crc · chars · bench",
+    title: "Protocol codecs", path: "src/emu/host/src/cxp/protocol/",
+    body: ["<code>packets.*</code>: Tables 19–23 as word frames. <code>toWords()</code> builds SOP..EOP, and <code>fromBody()</code> votes the 4× replicated bytes and checks the CRC.",
+      "<code>crc.*</code>: CRC32 over the words' little-endian bytes. The wire word is <code>~zlib</code> (§8.2.2.2).",
+      "<code>chars.*</code>: <code>CXC1</code> character frames: Table 15/16 triggers and Table 17 I/O acks, which have no SOP and can sit inside another packet.",
+      "<code>bench.h</code>: <code>CXB1</code> op codes, events, pins and capability bits."] },
+  fifo:   { x: 20,  y: 310, w: 200, h: 60, c: "host", t: "FifoEndpoint", s: "transport/fifo",
+    title: "FIFO transport", path: "src/emu/host/src/cxp/transport/fifo.*",
+    body: ["Envelope: <code>MAGIC | NWORDS | NWORDS×u32</code>, little-endian. Magic <code>CXP1</code>, <code>CXC1</code> or <code>CXB1</code>.",
+      "One reader and one writer thread per endpoint. The reader polls every 200 ms, slides to the next plausible magic after garbage (<code>resyncs</code>), and reopens the pipe when the peer closes it (<code>reopens</code>)."] },
+  parser: { x: 20,  y: 400, w: 200, h: 60, c: "host", t: "StreamParser", s: "parser/stream_parser",
+    title: "Stream parser", path: "src/emu/host/src/cxp/parser/stream_parser.* · image/",
+    body: ["Checks each stream packet's CRC, DsizeP and PacketTag continuity (<code>missing_packets</code>).",
+      "Scans the payload for K28.3 markers: <code>0x01</code> starts a rectangular image header (25 words), <code>0x02</code> is a line marker, and <code>0x03</code> / <code>0x04</code> are the arbitrary forms.",
+      "Reassembles the pixels into a <code>ReconstructedFrame</code>, which saves to png / bmp / jpg through QImage."] },
+  h2c:    { x: 262, y: 120, w: 116, h: 64, c: "pipe", t: "cxp.h2c", s: "host → camera",
+    title: "cxp.h2c (named pipe)", path: "$FIFO_DIR/cxp.h2c",
+    body: ["Host → camera. Carries <code>CXP1</code> command frames, <code>CXC1</code> uplink characters (triggers, I/O acks, a trigger inside a command) and <code>CXB1</code> bench ops.",
+      "The bridge opens it non-blocking and lazily, so either side can start or restart first."] },
+  c2h:    { x: 262, y: 330, w: 116, h: 64, c: "pipe", t: "cxp.c2h", s: "camera → host",
+    title: "cxp.c2h (named pipe)", path: "$FIFO_DIR/cxp.c2h",
+    body: ["Camera → host. Carries <code>CXP1</code> acks, stream and link-test packets, <code>CXC1</code> downlink trigger and I/O-ack packets, and <code>CXB1</code> replies and events.",
+      "The bridge ignores <code>SIGPIPE</code>, so a host that exits never stops the simulator."] },
+  up:     { x: 420, y: 40,  w: 190, h: 60, c: "bridge", t: "uplink: deframe", s: "u_refill · frame_kmask",
+    title: "Bridge uplink: deframe", path: "src/emu/bridge/dpi/cxp_fifo_dpi.c · u_refill(), frame_kmask()",
+    body: ["Reads whatever bytes are available and takes every complete frame. A <code>CXP1</code> frame becomes characters: the first word's K27.7 lanes and the last word's K29.7 lanes are K characters when at least 3 of 4 match, and every other character is data.",
+      "<code>CXC1</code> characters are queued as given (bit 8 = K). <code>CXB1</code> goes to <code>bench_op()</code> and is never sent on the link."] },
+  ser:    { x: 420, y: 130, w: 190, h: 60, c: "bridge", t: "uplink: 8B/10B serializer", s: "next_symbol · cxp_uplink_bit",
+    title: "Bridge uplink: 8B/10B serializer", path: "dpi/cxp_fifo_dpi.c · next_symbol(), serial_bit(), cxp_uplink_bit() · dpi/cxp_8b10b.h",
+    body: ["Encodes each character with running disparity (IEEE Clause 36 tables, D.x.A7 rule), then shifts it out LSB first (bit a first).",
+      "When the queue is empty it sends the IDLE word <code>K28.5 K28.1 K28.1 D21.5</code>, so the device's soft sampler keeps lock. An IDLE word, once started, is sent whole.",
+      "<code>UPLINK_BITS</code> can drop, repeat or hold bits. Each run of K27.7, K29.7, K28.2/4 or K28.6 reports an <code>UPLINK_MARK</code> event with its sim time."] },
+  down:   { x: 420, y: 330, w: 190, h: 60, c: "bridge", t: "downlink: reassemble", s: "cxp_downlink_word · d_emit",
+    title: "Bridge downlink: reassemble", path: "dpi/cxp_fifo_dpi.c · cxp_downlink_word(), d_emit(), d_emit_short()",
+    body: ["Called every <code>tx_clk</code> with the DUT's 32-bit word and kmask. Strips IDLE, collects SOP..EOP and writes it as one <code>CXP1</code> frame.",
+      "Takes Table 16 trigger and Table 17 I/O-ack packets (4× K28.4 / K28.2 / K28.6 + 4 data characters) out, even from inside a packet, and sends them as <code>CXC1</code> frames. A <code>SHORT_DL</code> event follows with the sim time and the insertion point.",
+      "A new K27.7 SOP inside an open packet means the device cut that packet short. The cut packet goes to the host as is, without EOP. A <code>FRAME_DL</code> event follows each non-stream packet."] },
+  bop:    { x: 420, y: 230, w: 190, h: 60, c: "bench", t: "bench_op", s: "CXB1 ops · pins · events",
+    title: "Bench (bridge side)", path: "dpi/cxp_fifo_dpi.c · bench_op(), cxp_bench_*()",
+    body: ["Applies each <code>CXB1</code> op at once: pins, REG_ERR, REG_STALL, the uplink ppm, pixel frames and beats, RESET, SYNC, DL_STATS.",
+      "<code>cxp_hw_env.sv</code> polls the state through <code>cxp_bench_*()</code> DPI calls. The device's <code>trig_o</code> edges come back through <code>cxp_bench_edge()</code> as <code>PIN_EDGE</code> events."] },
+  env:    { x: 650, y: 40,  w: 230, h: 72, c: "rtl", t: "cxp_hw_env.sv", s: "clocks · bit pacing · pixel port · APB mem",
+    title: "SystemVerilog top", path: "src/emu/bridge/tb/cxp_hw_env.sv",
+    body: ["Kept thin on purpose, so it runs in any DPI-capable simulator (Verilator 5 <code>--binary --timing</code>, or Questa <code>vsim -c</code>).",
+      "Three clocks, <code>app_clk</code> / <code>tx_clk</code> / <code>rx_clk</code>, 10 ns each, with <code>p_ASYNC_CLOCKS=1</code>.",
+      "Uplink bit clock: <code>OS_RATIO</code> (16) rx periods = 160 ns per bit, offset by the bench ppm, not locked to <code>rx_clk</code>.",
+      "Bench pins, the pixel port (<code>s_pix_*</code> + <code>s_meta_i</code>), a forced <code>reg_err</code>, and a 4 KB user window at <code>0x20000</code> on an APB3 slave."] },
+  rx:     { x: 650, y: 132, w: 230, h: 92, c: "rtl", t: "rx_domain", s: "rx_link: sampler → 8b10b → link_mon → parser · trigger_lspd · linktest",
+    title: "RX domain (uplink)", path: "src/rtl/rx/cxp_rx_domain.sv · cxp_rx_link.sv",
+    body: ["<code>cxp_rx_lspd_sampler</code> recovers bits from <code>rx_serial</code> at 16× oversampling, then <code>cxp_rx_8b10b_decoder</code> decodes them to characters.",
+      "<code>cxp_rx_link_mon</code> judges the framing. <code>cxp_rx_packet_parser</code> splits packets. <code>cxp_rx_trigger_lspd</code> decodes Table 15 triggers, and <code>cxp_rx_linktest</code> counts test packets.",
+      "The <code>cxp_ctrl_plane</code> sub-block (<code>cxp_ctrl_cmd_parser</code> + <code>cxp_ctrl_bus_master</code>) checks CRC and size, then runs the register access."] },
+  regs:   { x: 650, y: 244, w: 230, h: 52, c: "rtl", t: "cxp_ctrl_bootstrap_regs", s: "bootstrap + camera regs, XML ROM",
+    title: "Register file", path: "src/rtl/ctrl/cxp_ctrl_bootstrap_regs.sv · src/rtl/gen/cxp_regmap_pkg.sv",
+    body: ["Bootstrap registers (Standard <code>0xC0A79AE5</code> at 0x0000, ConnectionReset 0x4000, StreamPacketSizeMax 0x4010, TestMode 0x401C, …) and the camera block (Width 0x10000, AcquisitionStart 0x10010, TPG run 0x10038, …).",
+      "The GenICam XML is served from 0x90000000, and its URL string is at 0x6000."] },
+  app:    { x: 650, y: 316, w: 230, h: 72, c: "rtl", t: "app_domain", s: "acq_ctrl · tpg · pixel_ingress · packer · stream",
+    title: "App domain (pixels)", path: "src/rtl/app/",
+    body: ["<code>cxp_app_tpg</code> (or the bench pixel port) → <code>cxp_app_pixel_ingress</code> → <code>cxp_app_pixel_packer</code> → <code>cxp_app_stream</code>, which inserts the image header (25 words) and a line marker (2 words) before each line.",
+      "<code>cxp_app_acq_ctrl</code> starts and stops acquisition. Nothing enters while StreamPacketSizeMax &lt; 36 bytes."] },
+  cdc:    { x: 650, y: 408, w: 230, h: 44, c: "rtl", t: "cdc_layer", s: "every crossing · stream FIFO",
+    title: "CDC layer", path: "src/rtl/cdc/cxp_cdc_layer.sv · cxp_cdc_stream_fifo.sv",
+    body: ["Holds every clock crossing: config buses, acquisition start/stop pulses, the ack request (rx → tx), trigger / I/O-ack notifications, and the app → tx stream FIFO."] },
+  tx:     { x: 650, y: 472, w: 230, h: 92, c: "rtl", t: "tx_domain", s: "ctrl_ack · stream_pkt · trigger_hs · io_ack · linktest → arbiter → inserter",
+    title: "TX domain (downlink)", path: "src/rtl/tx/",
+    body: ["<code>cxp_tx_ctrl_ack</code> (Table 22), <code>cxp_tx_stream_pkt</code> (Table 19: StreamID, PacketTag, DsizeP, CRC over the payload) and <code>cxp_tx_linktest</code> feed <code>cxp_tx_arbiter</code>.",
+      "<code>cxp_tx_inserter</code> places <code>cxp_tx_trigger_hs</code> / <code>cxp_tx_io_ack</code> short packets, inside a long packet if one is running (§8.2.4), and fills idle time with IDLE.",
+      "Output: <code>cxp_if_data_o[31:0]</code> + <code>kmask[3:0]</code>, one word per <code>tx_clk</code>."] },
+  vcam:   { x: 420, y: 40,  w: 460, h: 524, c: "bench", t: "virtual camera", s: "sim/virtual_camera.* · virtual_camera_bench.cpp",
+    title: "Virtual camera", path: "src/emu/host/src/cxp/sim/virtual_camera.* · virtual_camera_bench.cpp",
+    body: ["Runs in the host process (<code>--spawn-sim</code>) or as <code>cxp sim --fifo-dir DIR</code>. It reads the same pipes and speaks the same envelope, so the host cannot tell it from the RTL.",
+      "Register file from the GenICam XML (<code>$CXP_XML</code>), TPG patterns, stream packets, and the in-process bench (every capability except the retired clock op).",
+      "It models the reference camera, not the standard. A validation FAIL against it is a real gap to CXP 1.1.1, and on some rows it is not a reference for the RTL."] },
+};
+const ARCH_EDGES = [
+  ["apps","client"],["client","codec"],["codec","fifo"],["fifo","parser"],
+  ["fifo","h2c","r"],["c2h","fifo","l"],["h2c","up","r"],["up","ser"],["ser","rx","r"],
+  ["h2c","bop","r"],["tx","down","l"],["down","c2h","l"],["bop","env","r"],
+  ["rx","regs"],["app","cdc"],["cdc","tx"],
+];
+let camMode = "rtl", archSel = "client";
+function colorOf(c) { return { host: ["--host","--host-soft"], pipe: ["--pipe","--pipe-soft"], bridge: ["--bridge","--bridge-soft"], rtl: ["--rtl","--rtl-soft"], bench: ["--bench","--bench-soft"] }[c]; }
+function drawArch() {
+  const svg = $("#archSvg");
+  const hidden = camMode === "vcam" ? new Set(["up","ser","down","bop","env","rx","regs","app","cdc","tx"]) : new Set(["vcam"]);
+  let s = `<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/></marker></defs>`;
+  // group labels
+  const grp = [[20,18,"HOST  src/emu/host","--host"],[262,18,"PIPES","--pipe"]];
+  if (camMode === "rtl") grp.push([420,18,"DPI-C BRIDGE  src/emu/bridge/dpi","--bridge"],[650,18,"RTL  cxp_device_top","--rtl"]);
+  else grp.push([420,18,"IN-PROCESS CAMERA","--bench"]);
+  for (const [x,y,t,c] of grp) s += `<text x="${x}" y="${y}" font-size="11" font-weight="700" letter-spacing=".06em" fill="var(${c})">${t}</text>`;
+  if (camMode === "rtl") s += `<rect x="640" y="26" width="250" height="548" rx="12" fill="none" stroke="var(--rtl)" stroke-dasharray="4 4" opacity=".6"/>`;
+  const ctr = n => [n.x + n.w / 2, n.y + n.h / 2];
+  const edge = (a, b, side) => {
+    const A = ARCH[a], B = ARCH[b];
+    let x1, y1, x2, y2;
+    if (side === "r") { x1 = A.x + A.w; y1 = A.y + A.h / 2; x2 = B.x; y2 = B.y + B.h / 2; }
+    else if (side === "l") { x1 = A.x; y1 = A.y + A.h / 2; x2 = B.x + B.w; y2 = B.y + B.h / 2; }
+    else { [x1] = ctr(A); y1 = A.y + A.h; [x2] = ctr(B); y2 = B.y; if (A.y > B.y) { y1 = A.y; y2 = B.y + B.h; } }
+    const mx = (x1 + x2) / 2;
+    const d = (side === "r" || side === "l") ? `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}` : `M${x1},${y1} L${x2},${y2}`;
+    return `<path d="${d}" fill="none" stroke="var(--muted)" stroke-width="1.4" marker-end="url(#ah)" opacity=".75"/>`;
+  };
+  const edges = camMode === "rtl" ? ARCH_EDGES : [["apps","client"],["client","codec"],["codec","fifo"],["fifo","parser"],["fifo","h2c","r"],["c2h","fifo","l"],["h2c","vcam","r"],["vcam","c2h","l"]];
+  for (const e of edges) { if (hidden.has(e[0]) || hidden.has(e[1])) continue; s += edge(...e); }
+  if (camMode === "rtl") {
+    // serial / parallel bus annotations
+    s += `<text x="430" y="206" font-size="10.5" fill="var(--muted)">→ rx_serial, 1 bit per 160 ns</text>`;
+    s += `<text x="430" y="408" font-size="10.5" fill="var(--muted)">← cxp_if_data_o + kmask,</text>`;
+    s += `<text x="430" y="421" font-size="10.5" fill="var(--muted)">one word per tx_clk</text>`;
+  }
+  for (const [id, n] of Object.entries(ARCH)) {
+    if (hidden.has(id)) continue;
+    const [fg, bg] = colorOf(n.c);
+    const sel = id === archSel ? " sel" : "";
+    s += `<g class="node${sel}" data-id="${id}" tabindex="0" role="button" aria-label="${esc(n.title)}">
+      <rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="9" fill="var(${bg})" stroke="var(${fg})" stroke-width="1.3"/>
+      <text x="${n.x + 10}" y="${n.y + 22}" font-size="13.5" font-weight="650" fill="var(--text)">${esc(n.t)}</text>
+      ${wrapSvg(n.s, n.x + 10, n.y + 40, n.w - 18, 11, "var(--muted)")}
+    </g>`;
+  }
+  svg.innerHTML = s;
+  svg.querySelectorAll(".node").forEach(g => {
+    const pick = () => { archSel = g.dataset.id; drawArch(); showArch(); };
+    g.addEventListener("click", pick);
+    g.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
+  });
+}
+function wrapSvg(text, x, y, w, fs, fill) {
+  const maxc = Math.floor(w / (fs * 0.56)); const words = text.split(" "); const lines = []; let cur = "";
+  for (const wd of words) { if ((cur + " " + wd).trim().length > maxc) { lines.push(cur); cur = wd; } else cur = (cur + " " + wd).trim(); }
+  if (cur) lines.push(cur);
+  return lines.map((l, i) => `<text x="${x}" y="${y + i * (fs + 3)}" font-size="${fs}" fill="${fill}" font-family="var(--mono)">${esc(l)}</text>`).join("");
+}
+function showArch() {
+  const n = ARCH[archSel]; if (!n) return;
+  const [fg] = colorOf(n.c);
+  $("#archDetail").innerHTML = `<h3 style="color:var(${fg})">${esc(n.title)}</h3><div class="path">${esc(n.path)}</div><ul>${n.body.map(b => `<li>${b}</li>`).join("")}</ul>`;
+}
+document.querySelectorAll("#camSeg button").forEach(b => b.onclick = () => {
+  camMode = b.dataset.cam;
+  document.querySelectorAll("#camSeg button").forEach(x => x.classList.toggle("on", x === b));
+  if (camMode === "vcam" && !["apps","client","codec","fifo","parser","h2c","c2h"].includes(archSel)) archSel = "vcam";
+  if (camMode === "rtl" && archSel === "vcam") archSel = "env";
+  drawArch(); showArch();
+});
+drawArch(); showArch();
+
+/* ================================================================== layers */
+(function layers() {
+  const ws = ctrlCmd(0, 0, 4);
+  const chars = frameChars(ws);
+  const st = { rd: 0 };
+  const syms = chars.map(c => { const rdIn = st.rd; const s = enc8b10b(c.v, c.k, st); return { ...c, s, rdIn }; });
+  const bitstream = syms.slice(0, 5).map(x => symBits(x.s).replace(" ", "")).join("");
+  const L = [
+    ["Application", "CameraControl::read", `<code>client.read(0x00000000, 4)</code>. The caller expects <code>0xC0A79AE5</code>, the CoaXPress magic, if a device is there.`],
+    ["Packet", "Table 21 · packets.cpp", `<div class="dump">${wordsDump(ws)}</div>
+      SOP · 4×TYPE 0x02 · <code>Cmd=00 Size=00 00 04</code> (P0 = opcode, then the size MSB first) · Address, big-endian · CRC32 over the two words before it (<code>~zlib</code> = <code>6F5D8656</code>, wire bytes <code>56 86 5D 6F</code>, the spec's worked example) · EOP.`],
+    ["Envelope", "cxp.h2c · fifo.cpp", `<div class="dump">${envDump(ws)}</div>`],
+    ["Characters", "u_refill · frame_kmask", `<div class="dump">${charsDump(chars)}</div>24 characters. Only the 4 lanes of the SOP word and the 4 of the EOP word are K characters, because at least 3 of the 4 lanes match. IDLE words fill the gaps before and after.`],
+    ["8B/10B symbols", "cxp_8b10b.h", `<div>${syms.slice(0, 12).map(x => `<span class="sym${x.k ? " k" : ""}"><b>${x.k ? KNAME[x.v] : dname(x.v)}</b>${symBits(x.s)}<br><span class="rd">RD${x.rdIn ? "+" : "−"} in</span></span>`).join("")}<span class="sym">…${syms.length - 12} more</span></div>
+      <span style="color:var(--muted);font-size:13px">Bits in transmit order (abcdei fghj, bit a first), assuming RD− at the SOP. On the real link the disparity is whatever the preceding IDLE left.</span>`],
+    ["Serial line", "cxp_hw_env · rx_serial", `<div class="dump">${bitstream}…</div>
+      One bit every <code>OS_RATIO × rx period</code> = 16 × 10 ns = <b>160 ns</b> sim time. The frame is 240 bits = <b>38.4 µs</b> of sim time. <code>cxp_rx_lspd_sampler</code> oversamples at 16× to recover them.`],
+    ["RTL", "rx → ctrl → regs → tx", `8B/10B decode → packet parser → <code>cxp_ctrl_cmd_parser</code> (CRC OK, size 4 ≤ max) → <code>cxp_ctrl_bus_master</code> reads 0x0000 → <code>cxp_tx_ctrl_ack</code> sends <code>SOP · 03030303 · 00000000 · 04000000 · E59AA7C0 · CRC · EOP</code> on the word bus, and the bridge sends it back on <code>cxp.c2h</code>.`],
+  ];
+  $("#layerStack").innerHTML = L.map(([n, sub, body]) => `<div class="layer"><div class="lname">${n}<small>${sub}</small></div><div>${body}</div></div>`).join("");
+})();
+
+/* ================================================================== scenarios */
+const LANES = [
+  { id: "app", t: "App / check", c: "--host" },
+  { id: "core", t: "libcxpcore", c: "--host" },
+  { id: "pipe", t: "FIFO pipes", c: "--pipe" },
+  { id: "br", t: "DPI bridge", c: "--bridge" },
+  { id: "rtl", t: "RTL device", c: "--rtl" },
+];
+const RD0 = ctrlCmd(0, 0, 4), ACK0 = ctrlAck(0, [bswap(0xC0A79AE5)]);
+const WR_SPSM = ctrlCmd(1, 0x4010, 4, [bswap(4096)]), ACK_W = ctrlAck(1);
+const CONNECT = [
+  [0x0000, 4, [0xC0A79AE5], "Standard: 0xC0A79AE5, so this is a CoaXPress device"],
+  [0x0004, 4, [0x00010001], "Revision 1.1"],
+  [0x2000, 32, null, "DeviceVendorName: \"AcmeCXP\""],
+  [0x2020, 32, null, "DeviceModelName: \"CamModel\""],
+  [0x0018, 4, [0x00006000], "XmlUrlAddress points at 0x6000"],
+  [0x6000, 64, null, "URL: \"Local:cxp_camera.xml;90000000;3849\""],
+  [0x4004, 4, [0], "DeviceConnectionID 0"],
+  [0x0008, 4, [1], "XmlManifestSize 1"],
+];
+const dump = (ws, cap) => `<div class="dump">${wordsDump(ws)}</div>${cap ? `<div style="font-size:12.5px;color:var(--muted)">${cap}</div>` : ""}`;
+const logLine = s => `<div class="dump">${esc(s)}</div>`;
+const HDR = rectHeader({ sid: 1, stag: 0, w: 640, xo: 0, h: 480, yo: 0, dsizel: 160, pixf: 0x0101 });
+
+const SCEN = [
+ { id: "read", name: "1 · Register read: Standard (0x0000)",
+   desc: "The simplest round trip, and the first thing every connection does. All words are from the RTL log.",
+   steps: [
+    { f: "app", to: "core", l: "read(0x0000, 4)", h: "The application asks for one register",
+      w: "camera/client.cpp", d: `The caller blocks on <code>CameraControl::read</code>, which holds the register mutex so that only one command is in flight. The codec builds a <code>CtrlCmdPacket{Read, 0x0000, nwords 1}</code>.${dump(RD0, "Table 21: SOP · TYPE · Cmd/Size · Addr · CRC · EOP (6 words)")}` },
+    { f: "core", to: "pipe", l: "CXP1 frame, 6 w", h: "Enveloped onto cxp.h2c",
+      w: "transport/fifo.cpp · writer thread", d: `The writer thread prefixes the magic and the word count and writes the bytes little-endian:<div class="dump">${envDump(RD0)}</div>The protocol log prints it as:${logLine("TX  CTRL_CMD READ addr=0x00000000 size=4 crc=ok (6 w)\n    FBFBFBFB 02020202 04000000 00000000 6F5D8656 FDFDFDFD")}` },
+    { f: "pipe", to: "br", l: "deframe → 24 chars", h: "The bridge takes the frame apart",
+      w: "cxp_fifo_dpi.c · u_refill(), frame_kmask()", d: `<code>u_refill()</code> pulls the available bytes, finds <code>CXP1</code>, and queues 24 characters:<div class="dump">${charsDump(frameChars(RD0))}</div>Until now the serializer had been sending IDLE words; the queued characters follow the IDLE word in progress.` },
+    { f: "br", to: "rtl", l: "8B/10B, 240 bits on rx_serial", h: "Bit by bit into the device",
+      w: "next_symbol() → cxp_uplink_bit() ← cxp_hw_env.sv", d: `Each character is 8B/10B-encoded and shifted out LSB first, one bit per 160 ns of sim time: 24 × 10 bits = 38.4 µs. When the first K27.7 and the first K29.7 go out, the bridge sends an <code>UPLINK_MARK</code> event to the host. These are the two <code>BENCH op 0x92</code> lines in the log:${logLine("RX  BENCH op 0x92, 5 words\nRX  BENCH op 0x92, 5 words")}` },
+    { f: "rtl", to: "rtl", l: "decode · check · read", h: "Inside the RTL",
+      w: "rx_lspd_sampler → rx_8b10b_decoder → rx_link_mon → rx_packet_parser → ctrl_cmd_parser → ctrl_bus_master → ctrl_bootstrap_regs", d: `The sampler recovers the bits and the decoder turns them into characters. The parser sees SOP and TYPE 0x02, and the command parser checks the CRC and the size. The bus master reads 0x0000 = <code>0xC0A79AE5</code>, and the ack request crosses rx → tx in <code>cxp_cdc_layer</code>.` },
+    { f: "rtl", to: "br", l: "ack words on cxp_if_data_o", h: "The ack leaves on the word bus",
+      w: "tx_ctrl_ack → tx_arbiter → tx_inserter", d: `<code>cxp_tx_ctrl_ack</code> builds the Table 22 long form. The arbiter grants it, and it leaves one word per <code>tx_clk</code>, with IDLE before and after:${dump(ACK0, "SOP (kmask 1111) · 4×TYPE 0x03 · 4×CODE 0x00 · Size = 4 bytes (BE) · data (BE) · CRC over CODE..data · EOP")}The downlink is <b>not</b> serialized in the emulator: the bridge sees the parallel word and kmask.` },
+    { f: "br", to: "pipe", l: "strip IDLE, CXP1 7 w", h: "Reassembled onto cxp.c2h",
+      w: "cxp_downlink_word() → d_emit()", d: `IDLE is dropped and the words from SOP to EOP become one frame:<div class="dump">${envDump(ACK0)}</div>A <code>FRAME_DL</code> event (<code>0x93</code>) follows with the packet's TYPE and its SOP and EOP sim times. The host uses these to measure latency in sim time.` },
+    { f: "pipe", to: "core", l: "peekType = CTRL_ACK", h: "The host routes and decodes it",
+      w: "fifo reader thread → CameraControl dispatch → CtrlAckPacket::fromBody", d: `The dispatch thread peeks at the TYPE without checking the CRC, so that a corrupted stream packet can still reach the parser. For an ack it votes the CODE, checks the CRC and wakes the waiting call.${logLine("RX  CTRL_ACK 0x00 OK size=4 data=[C0A79AE5] crc=ok (7 w)\n    FBFBFBFB 03030303 00000000 04000000 E59AA7C0 801E4ED4 FDFDFDFD")}` },
+    { f: "core", to: "app", l: "0xC0A79AE5", h: "Value returned",
+      w: "", d: `The value goes out big-endian (§8.2.1), so the host byte-swaps the data word: <code>bswap(E59AA7C0) = C0A79AE5</code> = <code>CXP_MAGIC</code>. The log shows about 16 ms of wall-clock time from TX to RX in this run.` },
+   ] },
+ { id: "write", name: "2 · Register write: StreamPacketSizeMax = 4096",
+   desc: "Writes get the short ack form: SOP · TYPE · CODE · EOP, with no size, data or CRC (Table 22). From the CT-004 log.",
+   steps: [
+    { f: "app", to: "core", l: "write(0x4010, 4096)", h: "Program the stream packet size",
+      w: "validation check / cxp write", d: `StreamPacketSizeMax powers up at 0, and while it is below 36 bytes no image enters. A streaming check programs <code>--host-spsm</code> (4096 by default) first.${dump(WR_SPSM, "Cmd=01 (WRITE) Size=4 · Addr 0x4010 BE · data 0x00001000 BE · CRC over 3 words")}` },
+    { f: "core", to: "pipe", l: "CXP1 7 w", h: "Onto cxp.h2c", w: "", d: `<div class="dump">${envDump(WR_SPSM)}</div>${logLine("TX  CTRL_CMD WRITE addr=0x00004010 size=4 data=[00001000] crc=ok (7 w)\n    FBFBFBFB 02020202 04000001 10400000 00100000 6719AB4C FDFDFDFD")}` },
+    { f: "pipe", to: "rtl", l: "28 chars · 280 bits", h: "Uplink", w: "bridge → rx_serial", d: `Same path as the read: 28 characters, 280 bits, 44.8 µs of sim time.` },
+    { f: "rtl", to: "rtl", l: "write register", h: "Register written", w: "ctrl_cmd_parser → ctrl_bus_master → ctrl_bootstrap_regs", d: `SPSM moves to the tx domain through the CDC layer. <code>cxp_tx_stream_pkt</code> now cuts packets of at most 4096 bytes, whole packet included: 8 framing words + 1016 payload words.` },
+    { f: "rtl", to: "core", l: "ack 0x01, 4 w", h: "Short-form ack", w: "tx_ctrl_ack", d: `${dump(ACK_W, "SOP · 4×TYPE 0x03 · 4×CODE 0x01 WRITE_OK · EOP")}${logLine("RX  CTRL_ACK 0x01 WRITE_OK (4 w)\n    FBFBFBFB 03030303 01010101 FDFDFDFD")}` },
+    { f: "core", to: "app", l: "ok", h: "Done", w: "", d: `A short-form code other than 0x01 or 0x03 is an error, from 0x40 (invalid address) to 0x80 (CRC error). A long-form reply to a write would be malformed.` },
+   ] },
+ { id: "connect", name: "3 · Connect: discovery and XML read",
+   desc: "What `cxp discover` and every GUI or validation connection does first: read the bootstrap block, find the XML and fetch it in 256-byte reads. From connect.log.",
+   steps: CONNECT.map(([a, sz, val, txt]) => ({
+      f: "core", to: "rtl", l: `READ 0x${hex(a, 4)} (${sz} B)`, h: txt, w: "camera/client.cpp · discovery",
+      d: `${dump(ctrlCmd(0, a, sz), `command: Cmd 00, Size ${sz}, Addr 0x${hex(a)}`)}${val ? dump(ctrlAck(0, val.map(bswap)), "ack computed on this page from the logged value") : `<div style="font-size:13px;color:var(--muted)">The reply carries ${sz / 4} data words of ASCII, big-endian in each word.</div>`}`
+    })).concat([
+      { f: "core", to: "rtl", l: "READ 0x90000000.. ×16", h: "Fetch the GenICam XML",
+        w: "genicam/sfnc.*", d: `The URL <code>Local:cxp_camera.xml;90000000;3849</code> gives the address and the length. The host reads 3849 bytes in 256-byte chunks (64 words is the largest transfer the device accepts; <code>CXP_MAX_CTRL_XFER_WORDS</code>):${logLine("TX  CTRL_CMD READ addr=0x90000000 size=256 crc=ok (6 w)\n    FBFBFBFB 02020202 00010000 00000090 ECC11297 FDFDFDFD\nRX  CTRL_ACK 0x00 OK size=256 data=[3C3F786D 6C207665 ...] (70 w)   \"<?xml ve...\"")}` },
+      { f: "core", to: "app", l: "device + feature tree", h: "Connected",
+        w: "", d: `The XML is parsed into SFNC features (Width, PixelFormat, AcquisitionStart, …). Register calls by feature name now go through it. The GUI's register tree shows the values from this sweep.` },
+    ]) },
+ { id: "stream", name: "4 · Acquisition: start the TPG and stream an image",
+   desc: "The writes from the IMG-001 log, then the RTL's stream path, then reassembly on the host.",
+   steps: [
+    { f: "app", to: "rtl", l: "WRITE 0x4010 = 4096", h: "Stream packet size", w: "", d: dump(WR_SPSM, "then ack 0x01") },
+    { f: "app", to: "rtl", l: "WRITE 0x10040 = 0", h: "AcquisitionMode: continuous", w: "", d: dump(ctrlCmd(1, 0x10040, 4, [0])) + logLine("TX  CTRL_CMD WRITE addr=0x00010040 size=4 data=[00000000] crc=ok (7 w)\n    FBFBFBFB 02020202 04000001 40000100 00000000 BCE7770E FDFDFDFD") },
+    { f: "app", to: "rtl", l: "WRITE 0x10038 = 1", h: "TPG run", w: "", d: dump(ctrlCmd(1, 0x10038, 4, [bswap(1)])) },
+    { f: "app", to: "rtl", l: "WRITE 0x10010 = 1", h: "AcquisitionStart", w: "cxp_app_acq_ctrl", d: dump(ctrlCmd(1, 0x10010, 4, [bswap(1)])) + `The start pulse crosses into the app domain, and the TPG starts the next frame.` },
+    { f: "rtl", to: "rtl", l: "TPG → header → lines", h: "Pixels become a stream", w: "app_tpg → pixel_ingress → pixel_packer → app_stream → cdc_stream_fifo",
+      d: `For the power-on 640 × 480 Mono8 image on StreamID 1, the image header (Table 38) is 25 words, each field byte replicated 4 times:${dump(HDR, "K28.3 marker · 0x01 rect header · StreamID · SourceTag hi/lo · Xsize(3) · Xoffs(3) · Ysize(3) · Yoffs(3) · DsizeL(3) = 160 words · PixelF 0x0101 (2) · TapG (2) · Flags")}Then each line is a line marker <code>7C7C7C7C 02020202</code> followed by 160 words of pixels.` },
+    { f: "rtl", to: "br", l: "stream packets, 1024 w", h: "Cut into Table 19 packets", w: "tx_stream_pkt → tx_arbiter → tx_inserter",
+      d: `Each packet: <code>SOP · 4×0x01 · 4×StreamID · 4×PacketTag · 4×DsizeP[15:8] · 4×DsizeP[7:0] · payload · CRC(payload) · EOP</code>. With SPSM = 4096: 1016 payload words, 1024 words in all. The packet boundaries ignore image lines, so a packet carries 6–7 line markers.` },
+    { f: "br", to: "core", l: "CXP1 1024 w each", h: "Onto cxp.c2h", w: "cxp_downlink_word()",
+      d: logLine("RX  STREAM sid=0x01 tag=0x8E dsizeP=1016 payload=1016 image-header=1 line-markers=7 crc=ok (1024 w)\nRX  STREAM sid=0x01 tag=0x8F dsizeP=1016 payload=1016 line-markers=6 crc=ok (1024 w)\nRX  STREAM sid=0x01 tag=0x90 dsizeP=1016 payload=1016 line-markers=6 crc=ok (1024 w)") + `The tag counts on across images. The host flags any gap as <code>missing_packets</code>.` },
+    { f: "core", to: "core", l: "parse + reassemble", h: "StreamParser", w: "parser/stream_parser.cpp",
+      d: `Checks CRC, DsizeP and tag continuity. The marker walker finds K28.3 + 0x01 → <code>decodeRecHeader</code> (width, height, offsets, PixelFormat) and starts a frame. Each K28.3 + 0x02 starts a line, and the pixel words fill it. When the last line is complete, the parser returns a <code>ReconstructedFrame</code>.` },
+    { f: "core", to: "app", l: "image", h: "Delivered", w: "cxp stream-capture / image window / IMG-* checks",
+      d: `<code>stream-capture</code> saves the frames, and the GUI shows them live. The IMG checks compare every header field with the registers.` },
+   ] },
+ { id: "trig", name: "5 · Host trigger (Table 15) → I/O acknowledgment",
+   desc: "A character-level transaction: a CXC1 frame carries the low-speed trigger, and the device answers with a Table 17 I/O ack, which the bridge hands back as CXC1. From the TRIG-001 log.",
+   steps: [
+    { f: "app", to: "core", l: "lsTrigger(fall, 0)", h: "Build a Table 15 trigger", w: "protocol/chars.cpp",
+      d: `Table 15 is 3 K characters and then the delay 3 times. Rising edge: <code>K28.2 K28.4 K28.4</code>. Falling edge: <code>K28.4 K28.2 K28.2</code>. It has no SOP, so a <code>CXP1</code> word frame cannot carry it.` },
+    { f: "core", to: "pipe", l: "CXC1, 6 chars", h: "Character frame", w: "",
+      d: `One character per word: bits 7:0 the character, bit 8 the K flag.<div class="dump">${envDump([0x19C, 0x15C, 0x15C, 0, 0, 0], 0x43584331)}</div>${logLine("TX  CHARS 6  K.9C K.5C K.5C 00 00 00")}` },
+    { f: "br", to: "rtl", l: "8B/10B at any char boundary", h: "Onto rx_serial", w: "u_refill → next_symbol",
+      d: `The characters go out in order, even between two IDLE words. An <code>UPLINK_MARK</code> event (<code>0x92</code>) reports when the first K28.4 went out. Later cases send the trigger followed by an IDLE word:${logLine("TX  CHARS 10  K.5C K.9C K.9C 00 00 00 K.BC K.3C K.3C B5")}` },
+    { f: "rtl", to: "rtl", l: "trigger_lspd → trig_o", h: "Decoded", w: "rx_trigger_lspd",
+      d: `The trigger decoder votes the edge and the delay, and recreates the trigger on <code>trig_o</code>. <code>cxp_hw_env.sv</code> reports each edge of <code>trig_o</code> as a <code>PIN_EDGE</code> event (pin 16) with its sim time. Receiving the trigger also raises an I/O-ack request in the tx domain.` },
+    { f: "rtl", to: "br", l: "4×K28.6 + 4×0x01", h: "Table 17 I/O ack on the downlink", w: "tx_io_ack → tx_inserter",
+      d: `8 characters with no SOP. The inserter places it at a word boundary, inside a running packet if necessary (§8.2.4).` },
+    { f: "br", to: "core", l: "CXC1 + SHORT_DL", h: "Taken out of the downlink", w: "d_emit_short()",
+      d: logLine("RX  CHARS IO_ACK code=0x01  K.DC K.DC K.DC K.DC 01 01 01 01\nRX  BENCH op 0x91, 7 words") + `<code>SHORT_DL</code> (<code>0x91</code>) gives the sim time of the first word, whether the ack was inserted into a packet, and after how many words of it.` },
+    { f: "core", to: "app", l: "ack seen, latency", h: "Judged", w: "cases/trig/…",
+      d: `The check measures the time from <code>UPLINK_MARK</code> to <code>SHORT_DL</code> in sim time, repeats for each delay in <code>delays=[0, 120, 239]</code>, and places the trigger inside a command at <code>stream_cmd_positions</code>.` },
+   ] },
+ { id: "bench", name: "6 · Bench: reset, device trigger, SYNC",
+   desc: "Driving the device's pins the way the UVM bench does, over CXB1.",
+   steps: [
+    { f: "app", to: "br", l: "HELLO", h: "What can this bench do?", w: "bench_op()",
+      d: `Reply <code>HELLO|0x80 [version, caps]</code>. The RTL bench reports every capability bit. A device without a bench never answers, and the host then marks bench cases NOT RUN.` },
+    { f: "app", to: "br", l: "GET_PINS → 0x08", h: "Read the input levels", w: "",
+      d: logLine("TX  BENCH GET_PINS\nRX  BENCH GET_PINS reply inputs 0x08") + `Bit (pin − 1) is set for each input at 1. 0x08 = pin 4, <code>USE_TPG</code>.` },
+    { f: "app", to: "rtl", l: "RESET inputs 0x00", h: "Power-on reset, as UVM starts each test", w: "cxp_hw_env.sv reset sequence",
+      d: logLine("TX  BENCH RESET, inputs 0x00\nRX  BENCH RESET done") + `8 <code>app_clk</code> cycles with the inputs at the given levels. REG_ERR and REG_STALL turn off, and queued pixel frames are dropped. An optional domain mask pulses only the app, tx or rx reset. The host then polls <code>Standard</code> until the device answers.` },
+    { f: "app", to: "rtl", l: "PIN TRIG_IN = 1", h: "Device-side trigger", w: "trig_i → tx_trigger_hs",
+      d: `The device sends a Table 16 high-speed trigger downlink: 4×K28.4 (rising) or 4×K28.2 (falling), then the delay 4 times, inserted into a stream packet if one is running.` },
+    { f: "br", to: "core", l: "CXC1 + SHORT_DL(inside, index)", h: "Taken out, the packet stays intact", w: "d_emit_short()",
+      d: `The host gets the trigger as a <code>CXC1</code> frame. The stream packet it cut into arrives whole in its <code>CXP1</code> frame. <code>SHORT_DL</code> says where the trigger sat. <code>DL_STATS</code> counts the IDLE words and short packets inside packets.` },
+    { f: "app", to: "br", l: "SYNC token", h: "Barrier", w: "",
+      d: logLine("TX  BENCH SYNC 1073742512\nRX  BENCH SYNC reply 1073742512") + `The bench replies once every earlier op has taken effect. With <code>CAP_TIMES</code> the reply adds the bench time and the length of the device's millisecond, so checks can convert device timeouts into sim time.` },
+   ] },
+];
+
+let scen = 0, step = 0, timer = null;
+const sel = $("#scenSel");
+sel.innerHTML = SCEN.map((s, i) => `<option value="${i}">${esc(s.name)}</option>`).join("");
+sel.onchange = () => { scen = +sel.value; step = 0; stopPlay(); renderSeq(); };
+function renderSeq() {
+  const S = SCEN[scen]; $("#scenDesc").textContent = S.desc;
+  const W = 640, top = 44, rowH = 38, n = S.steps.length, H = top + n * rowH + 16;
+  const lx = i => 64 + i * ((W - 128) / (LANES.length - 1));
+  const li = id => LANES.findIndex(l => l.id === id);
+  let s = `<defs><marker id="sa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--text)"/></marker>
+    <marker id="sa2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker></defs>`;
+  S.steps.forEach((st, i) => {
+    const y = top + i * rowH;
+    s += `<g class="step-row${i === step ? " cur" : ""}" data-i="${i}"><rect class="row-bg" x="0" y="${y}" width="${W}" height="${rowH}" fill="transparent" rx="6"/></g>`;
+  });
+  LANES.forEach((l, i) => {
+    s += `<text x="${lx(i)}" y="18" text-anchor="middle" font-size="12" font-weight="700" fill="var(${l.c})">${l.t}</text>`;
+    s += `<line x1="${lx(i)}" y1="28" x2="${lx(i)}" y2="${H - 8}" stroke="var(${l.c})" stroke-width="1.2" stroke-dasharray="3 4" opacity=".55"/>`;
+  });
+  S.steps.forEach((st, i) => {
+    const y = top + i * rowH + rowH / 2 + 6, a = li(st.f), b = li(st.to), cur = i === step;
+    const col = cur ? "var(--accent)" : "var(--text)", mk = cur ? "sa2" : "sa", sw = cur ? 2.4 : 1.3;
+    s += `<g class="step-row${cur ? " cur" : ""}" data-i="${i}" style="pointer-events:all">`;
+    s += `<text x="8" y="${y + 4}" font-size="11" fill="var(--muted)" font-family="var(--mono)">${i + 1}</text>`;
+    if (a === b) {
+      const x = lx(a), left = x > W - 160, d = left ? -1 : 1;
+      s += `<path d="M${x},${y - 8} h${26 * d} v14 h${-24 * d}" fill="none" stroke="${col}" stroke-width="${sw}" marker-end="url(#${mk})"/>`;
+      s += `<text x="${x + 32 * d}" y="${y + 3}" text-anchor="${left ? "end" : "start"}" font-size="11.5" fill="${col}" font-weight="${cur ? 700 : 500}">${esc(st.l)}</text>`;
+    } else {
+      const x1 = lx(a), x2 = lx(b), dir = x2 > x1 ? 1 : -1;
+      s += `<line x1="${x1 + dir * 4}" y1="${y}" x2="${x2 - dir * 6}" y2="${y}" stroke="${col}" stroke-width="${sw}" marker-end="url(#${mk})"/>`;
+      s += `<text x="${(x1 + x2) / 2}" y="${y - 6}" text-anchor="middle" font-size="11.5" fill="${col}" font-weight="${cur ? 700 : 500}">${esc(st.l)}</text>`;
+    }
+    s += `</g>`;
+  });
+  const svg = $("#seqSvg"); svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.innerHTML = s;
+  svg.querySelectorAll(".step-row").forEach(g => g.addEventListener("click", () => { step = +g.dataset.i; stopPlay(); renderSeq(); }));
+  const st = S.steps[step];
+  $("#stepCtr").textContent = `step ${step + 1} / ${n}`;
+  $("#stepDetail").innerHTML = `<h3>${step + 1}. ${esc(st.h)}</h3>${st.w ? `<div class="where mono">${esc(st.w)}</div>` : ""}<div>${st.d}</div>`;
+}
+function stopPlay() { if (timer) { clearInterval(timer); timer = null; $("#bPlay").textContent = "▶ Play"; } }
+$("#bPrev").onclick = () => { stopPlay(); step = Math.max(0, step - 1); renderSeq(); };
+$("#bNext").onclick = () => { stopPlay(); step = Math.min(SCEN[scen].steps.length - 1, step + 1); renderSeq(); };
+$("#bPlay").onclick = () => {
+  if (timer) return stopPlay();
+  if (step >= SCEN[scen].steps.length - 1) step = 0;
+  $("#bPlay").textContent = "❚❚ Pause"; renderSeq();
+  timer = setInterval(() => { if (step >= SCEN[scen].steps.length - 1) return stopPlay(); step++; renderSeq(); }, 2600);
+};
+document.addEventListener("keydown", e => {
+  if (e.target.matches("input, select, textarea")) return;
+  const r = $("#tx").getBoundingClientRect(); if (r.top > innerHeight || r.bottom < 0) return;
+  if (e.key === "ArrowRight") $("#bNext").click(); if (e.key === "ArrowLeft") $("#bPrev").click();
+});
+renderSeq();
+
+/* ================================================================== packet lab */
+const num = s => { s = String(s).trim(); const v = /^0x/i.test(s) ? parseInt(s, 16) : parseInt(s, 10); return Number.isFinite(v) ? v >>> 0 : 0; };
+function labBuild() {
+  const t = $("#lType").value, bad = $("#lBad").checked;
+  document.querySelectorAll(".lab-form [data-for]").forEach(l => l.style.display = l.dataset.for.split(" ").includes(t) ? "" : "none");
+  let ws, fields, uplink = false, note = "";
+  if (t === "rd" || t === "wr") {
+    uplink = true;
+    const addr = num($("#lAddr").value), val = num($("#lVal").value);
+    const size = t === "rd" ? Math.max(4, num($("#lSize").value)) : 4;
+    ws = t === "rd" ? ctrlCmd(0, addr, size, [], bad) : ctrlCmd(1, addr, 4, [bswap(val)], bad);
+    fields = ["SOP: 4 × K27.7", "TYPE 0x02 (control command), 4× replicated",
+      `P0 Cmd = 0x0${t === "rd" ? 0 : 1} (${t === "rd" ? "READ" : "WRITE"}), P1..P3 Size = ${size} bytes, MSB first`,
+      `Address 0x${hex(addr)}, big-endian`];
+    if (t === "wr") fields.push(`Data 0x${hex(val)}, big-endian`);
+    fields.push(`CRC32 over the ${ws.length - 4} words before it, sent as ~zlib${bad ? " (<b style='color:var(--bad)'>inverted: the device should answer 0x80</b>)" : ""}`, "EOP: 4 × K29.7");
+    if (t === "rd" && size > 256) note = `The device rejects reads larger than 64 words (256 bytes) with 0x45 BAD_SIZE.`;
+  } else if (t === "ackok") {
+    const val = num($("#lVal").value);
+    ws = ctrlAck(0, [bswap(val)], bad);
+    fields = ["SOP", "TYPE 0x03 (control ack)", "CODE 0x00: final, OK, data follows", "Size = 4 bytes, big-endian (one word, Table 22)", `Data 0x${hex(val)}, big-endian`, `CRC32 over CODE..data${bad ? " (<b style='color:var(--bad)'>inverted</b>)" : ""}`, "EOP"];
+  } else if (t === "ackshort") {
+    const code = num($("#lCode").value);
+    ws = ctrlAck(code);
+    fields = ["SOP", "TYPE 0x03 (control ack)", `CODE 0x${hx2(code)}: short form, so no Size, data or CRC`, "EOP"];
+  } else {
+    const sid = num($("#lSid").value) & 0xFF, tag = num($("#lTag").value) & 0xFF;
+    const w = Math.max(4, num($("#lW").value)), h = Math.max(1, num($("#lH").value)), spsm = Math.max(36, num($("#lSpsm").value));
+    const dsizel = Math.ceil(w / 4), payloadWords = Math.floor(spsm / 4) - 8;
+    const hdr = rectHeader({ sid, stag: 0, w, xo: 0, h, yo: 0, dsizel, pixf: 0x0101 });
+    const lm = [0x7C7C7C7C, 0x02020202];
+    const pixN = Math.max(0, Math.min(6, payloadWords - hdr.length - 2));
+    const pix = Array.from({ length: pixN }, (_, i) => { const b = 4 * i; return (b | (b + 1) << 8 | (b + 2) << 16 | (b + 3) << 24) >>> 0; });
+    ws = [SOP, rep(1), rep(sid), rep(tag), rep((payloadWords >>> 8) & 0xFF), rep(payloadWords & 0xFF), ...hdr, ...lm, ...pix];
+    const hdrF = ["K28.3 stream marker (kmask 1111)", "0x01: rectangular image header", "StreamID", "SourceTag[15:8]", "SourceTag[7:0]",
+      "Xsize[23:16]", "Xsize[15:8]", "Xsize[7:0]", "Xoffs[23:16]", "Xoffs[15:8]", "Xoffs[7:0]", "Ysize[23:16]", "Ysize[15:8]", "Ysize[7:0]",
+      "Yoffs[23:16]", "Yoffs[15:8]", "Yoffs[7:0]", "DsizeL[23:16]", "DsizeL[15:8]", `DsizeL[7:0]: ${dsizel} words per line`, "PixelF[15:8]", "PixelF[7:0]: 0x0101 Mono8", "TapG[15:8]", "TapG[7:0]", "Flags"];
+    fields = ["SOP", "TYPE 0x01 (stream)", `StreamID ${sid}`, `PacketTag ${tag} (+1 per packet, wraps at 256)`, `DsizeP[15:8]`, `DsizeP[7:0]: payload = ${payloadWords} words`,
+      ...hdrF.map(f => "payload · " + f), "payload · K28.3 line marker", "payload · 0x02: line marker", ...pix.map((_, i) => `payload · pixels ${4 * i}..${4 * i + 3} (illustrative values)`)];
+    fields.push("…"); ws.push(null);
+    fields.push(`… ${payloadWords - hdr.length - 2 - pixN} more payload words · CRC32 over the payload only · EOP`); ws.push(null);
+    note = `SPSM ${spsm} B = ${Math.floor(spsm / 4)} words, of which 8 are framing (SOP, 5 header words, CRC, EOP). One image = ${h} × (2 + ${dsizel}) + 25 = ${h * (2 + dsizel) + 25} words ≈ ${Math.ceil((h * (2 + dsizel) + 25) / payloadWords)} packets.`;
+  }
+  // words table
+  const real = ws.filter(w => w !== null);
+  $("#labWords").innerHTML = `<tr><th>#</th><th>Word</th><th>Field</th></tr>` + ws.map((w, i) =>
+    `<tr class="${w === SOP || w === EOP || w === 0x7C7C7C7C ? "kw" : ""}"><td>${w === null ? "" : i}</td><td>${w === null ? "…" : hex(w)}</td><td class="f">${fields[i] || ""}</td></tr>`).join("");
+  // envelope
+  $("#labEnv").innerHTML = t === "stream" ? `<span class="m">A stream packet travels c2h as one CXP1 frame of all ${Math.floor(num($("#lSpsm").value) / 4)} words:</span>\n` + envDump(real, 0x43585031, 8) : envDump(real, 0x43585031, 14);
+  // symbols
+  if (uplink) {
+    const chars = frameChars(real), st = { rd: 0 };
+    $("#labSymH").style.display = "";
+    $("#labSym").innerHTML = chars.map(c => { const rdIn = st.rd, s = enc8b10b(c.v, c.k, st);
+      return `<span class="sym${c.k ? " k" : ""}" title="0x${hx2(c.v)}"><b>${c.k ? KNAME[c.v] : dname(c.v)}</b>${symBits(s)}<br><span class="rd">RD${rdIn ? "+" : "−"}</span></span>`; }).join("");
+    const bits = chars.length * 10;
+    $("#labStat").innerHTML = `<span>words <b>${real.length}</b></span><span>characters <b>${chars.length}</b></span><span>uplink bits <b>${bits}</b></span><span>sim time on rx_serial <b>${(bits * 0.16).toFixed(1)} µs</b></span><span>pipe bytes <b>${8 + 4 * real.length}</b></span>${note ? `<span style="color:var(--warn)">${note}</span>` : ""}`;
+  } else {
+    $("#labSymH").style.display = "none";
+    $("#labSym").innerHTML = `<p style="color:var(--muted);font-size:13.5px;margin:6px 0 0">Downlink: the RTL hands the bridge 32-bit words with a kmask, one per <code>tx_clk</code> (10 ns). They are never 8B/10B-encoded in the emulator. SOP, EOP and K28.3 words carry kmask 1111, and every other word 0000.</p>`;
+    $("#labStat").innerHTML = `<span>words <b>${t === "stream" ? Math.floor(num($("#lSpsm").value) / 4) : real.length}</b></span><span>tx_clk cycles <b>${t === "stream" ? Math.floor(num($("#lSpsm").value) / 4) : real.length}</b></span>${note ? `<span style="color:var(--muted)">${note}</span>` : ""}`;
+  }
+}
+["#lType", "#lAddr", "#lSize", "#lVal", "#lCode", "#lSid", "#lTag", "#lW", "#lH", "#lSpsm", "#lBad"].forEach(id => { $(id).addEventListener("input", labBuild); $(id).addEventListener("change", labBuild); });
+$("#lType").addEventListener("change", () => {
+  const t = $("#lType").value;
+  if (t === "wr") { $("#lAddr").value = "0x00010000"; $("#lVal").value = "320"; }
+  if (t === "rd") { $("#lAddr").value = "0x00000000"; }
+  if (t === "ackok") { $("#lVal").value = "0xC0A79AE5"; }
+  labBuild();
+});
+labBuild();
+
+/* ================================================================== bench tables */
+const OPS = [
+  ["1 HELLO", "→ version, capability bits"], ["2 PIN", "[pin, value]: drive a device input"],
+  ["3 REG_ERR", "[code]: every register access answers this Table 22 code; 0 = off"], ["5 UPLINK_PPM", "[ppm]: host bit-rate offset"],
+  ["6 PIXEL_FRAME", "a frame on s_pix_* with its s_meta_i, at a valid density; reply when the last pixel is taken"],
+  ["7 SYNC", "[token]: reply once every earlier op is in (+ bench time with CAP_TIMES)"], ["8 GET_PINS", "→ the input levels"],
+  ["9 RESET", "[inputs, domains]: power-on reset; clocks and bit rate stay"], ["10 REG_STALL", "[ms, pslverr]: the user window at 0x20000 answers late, or never"],
+  ["11 PIXEL_BEATS", "a pixel frame with SOF / EOL / EOF given per beat (malformed framing)"], ["12 UPLINK_BITS", "[mode, n]: drop, repeat or hold bits on the host line"],
+  ["13 DL_STATS", "→ packets, IDLE words inside packets, short packets inside / between packets"],
+];
+const EVS = [["0x90 PIN_EDGE", "[pin, value, time_ns]: a device output changed (trig_o, glitch pulse)"],
+  ["0x91 SHORT_DL", "a downlink trigger / I/O ack: sim time, inside a packet?, after how many words"],
+  ["0x92 UPLINK_MARK", "first character of a K27.7 / K29.7 / K28.2/4 / K28.6 run went on the uplink"],
+  ["0x93 FRAME_DL", "after every non-stream downlink packet: TYPE, SOP and EOP times, words"]];
+const PINS = [["1 TRIG_IN", "trig_i: device → host trigger source"], ["2 EXT_LINK", "from_extension_link_i"], ["3 TRIG_POLARITY", "cfg_trig_polarity_i"],
+  ["4 USE_TPG", "cfg_use_tpg_i: 1 test pattern, 0 pixel port"], ["5 TPG_RUN", "cfg_run_i"], ["6 ARBITRARY", "cfg_arbitrary_i: arbitrary header / markers"],
+  ["16 TRIG_OUT", "trig_o (output, PIN_EDGE)"], ["17 TRIG_GLITCH", "trig_glitch_pulse_o (output)"]];
+const tbl = rows => rows.map(([a, b]) => `<tr><td class="mono" style="white-space:nowrap">${a}</td><td>${esc(b)}</td></tr>`).join("");
+$("#benchOps").innerHTML = tbl(OPS); $("#benchEv").innerHTML = tbl(EVS); $("#benchPins").innerHTML = tbl(PINS);
+
+/* ================================================================== toc highlight */
+const secs = [...document.querySelectorAll("main section")];
+const links = [...document.querySelectorAll("#toc a")];
+const io = new IntersectionObserver(es => es.forEach(e => {
+  if (e.isIntersecting) links.forEach(a => a.classList.toggle("active", a.getAttribute("href") === "#" + e.target.id));
+}), { rootMargin: "-40% 0px -55% 0px" });
+secs.forEach(s => io.observe(s));
+})();
+</script>
+</body>
+</html>

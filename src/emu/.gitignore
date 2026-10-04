@@ -1,0 +1,58 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Test / coverage
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+.cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Verilator / HW simulation ---
+bridge/build/
+obj_dir/
+*.vcd
+*.fst
+*.fst.hier
+*.wlf
+*.vstf
+sim_build/
+work/
+transcript
+modelsim.ini
+*.o
+*.d
+*.a
+
+# Generated captures / dumps
+*.pcap
+
+# --- Editors / OS ---
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+# cxp validate protocol logs (default --log-dir)
+validation_logs/

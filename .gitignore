@@ -1,0 +1,97 @@
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# ---------------------------------------------------------------------------
+# cocotb / simulator build artifacts
+# ---------------------------------------------------------------------------
+sim_build/
+results.xml
+*.vcd
+*.fst
+*.ghw
+*.shm/
+*.wlf
+*.vpd
+*.fsdb
+transcript
+
+# Icarus / Verilator
+*.vvp
+obj_dir/
+
+# Synopsys / Cadence / Questa / VCS
+csrc/
+simv
+simv.daidir/
+ucli.key
+vc_hdrs.h
+DVEfiles/
+inter.vpd
+.simvision/
+.bpad/
+xrun.history
+xcelium.d/
+xmsim.key
+xmverilog.history
+xmsim.history
+
+# Logs
+*.log
+*.jou
+
+# ---------------------------------------------------------------------------
+# Coverage / reports
+# ---------------------------------------------------------------------------
+coverage_report.html
+coverage.dat
+*.ucdb
+htmlcov/
+fsm_coverage.json
+src/tb_unit/*/*/expected_fail.json
+src/tb_unit/tb_unit_test_report.html
+
+# ---------------------------------------------------------------------------
+# Project-specific scratch / dumps
+# ---------------------------------------------------------------------------
+src/verif/00_test_results/
+src/verif/uvm_test_report.html
+src/verif/sim_build/
+src/verif/sim_build_*/
+src/verif/coverage_report.html
+src/verif/cxp_stream_dump.txt
+src/verif/dump.vcd
+src/verif/results.xml
+src/verif/plan_status.json
+src/verif/downlink.bin.gz
+
+# ---------------------------------------------------------------------------
+# Editor / IDE
+# ---------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.cache/
+
+# ---------------------------------------------------------------------------
+# OS
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------------------------------------------------------------------------
+# Claude Code per-machine settings (each directory keeps its own, untracked)
+# ---------------------------------------------------------------------------
+.claude/settings.local.json

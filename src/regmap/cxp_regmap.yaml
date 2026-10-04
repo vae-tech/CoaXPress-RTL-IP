@@ -1,0 +1,289 @@
+# =============================================================================
+# cxp_regmap.yaml — the one register map of the CoaXPress device IP.
+#
+# This is the only file to edit to change a register, a limit, an
+# enumeration entry, a GenICam feature or the device identity.
+# `make regmap` (python3 src/regmap/gen_regmap.py) generates from it:
+#   src/regmap/genicam/cxp_camera.xml        the GenICam (GenApi schema 1.1) description
+#   src/rtl/gen/cxp_camera_xml.mem           the XML ROM image ($readmemh), built from
+#                                            the same bytes as the XML file
+#   src/rtl/gen/cxp_regmap_pkg.sv            addresses, reset values, strings, XML ROM size
+#   src/model/cxp_protocol/cxp_protocol/regmap.py  addresses and reset values (Python)
+#   src/model/cxp_protocol/cxp_protocol/regmodel.py  the map as data (reference model)
+#   src/regmap/cxp_regmap.h                  addresses (C: the DPI bridge)
+#   src/regmap/cxp_regmap.hpp                the map for C++ (src/emu/host, namespace cxp::reg)
+#   docs/design/modules/pkg/cxp_regmap.md    register table
+# `make regmap-check` (CI) fails when a generated file is out of date;
+# `make genicam-check` loads the XML in the EMVA reference implementation.
+# The register file, src/rtl/ctrl/cxp_ctrl_bootstrap_regs.sv, is hand-written on top
+# of cxp_regmap_pkg: its ROWS table and value_ok() must follow this map
+# (the `reg` / `out` / `in` / `nv` fields name its signals and ports).
+#
+# Address decode (what the register file does, row by row):
+#   bootstrap   Table 45 rows at 0x0000 .. 0xFFFF (full 32-bit decode).
+#   device      §10.3.19-27 use-case features: the 0x3000 slot reads the
+#               feature's manufacturer address (read-only); the feature is a
+#               R/W register at that address.
+#   manufacturer  plain R/W words in the window at mfr.base (`words` of
+#               them); the device features sit in the same window.
+#   XML ROM     the GenICam file at xml.blob_addr (full address), read-only.
+# The register file is one table (ROWS) of these rows; the last row that
+# covers an address answers, so the manufacturer window precedes the words
+# inside it.  A window word without a row reads 0 and drops a write.
+#
+# Every access returns a Table 22 code: 0x40 unaligned or nothing there,
+# 0x43 write to RO / STR / ZERO / the XML ROM, 0x44 read of a write-only
+# feature, 0x41 a value the register does not take (`min`, `max`,
+# `allowed`, `multiple`).  A refused write changes nothing.  The same
+# limits are the XML's Min / Max / Inc / enumeration entries, so a GenApi
+# host is offered exactly what the register file takes.
+#
+# Bootstrap row kinds:
+#   RO      constant `value`; `out` exports it as a port.
+#   RW      32-bit storage `reg` with power-on `reset`.  Optional:
+#             conn_reset  value a ConnectionReset loads
+#             max         a write above this is refused (0x41); `links`
+#                         means p_NUM_LINKS - 1 (0 in the Python model
+#                         and in the XML, which describe the 1-link device)
+#             min         a write below this is refused (0x41)
+#             multiple    a write that is not a multiple of this is refused
+#             allowed     the only values a write may set (else 0x41): a
+#                         list, or a mapping entry-name -> value, which is
+#                         then the XML enumeration
+#             wr_pulse    output pulsed one cycle after every write
+#             out         exported port (`bits` = low bits exported, default 32)
+#   CRST    ConnectionReset (§10.3.28): write 1 applies every conn_reset
+#           (`max` limits the value),
+#           pulses `out`, pulses every test-counter clear and self-clears
+#           once the other clock domains have echoed it (or on its timeout).
+#   CNT     live test counter (`in`, per link, selected by TestErrorCountSelector),
+#           `len` 4 or 8 bytes (8 = two words, high word first); writing 0
+#           pulses `out`, the clear of this counter only (§10.3.37-39).
+#   STR     read-only string, `len` bytes, NULL-padded, big-endian.
+#   ZERO    read-only range of `len` bytes that reads 0.
+#   NVSTR   read/write 128-bit string `reg`, power-on value from input `nv`.
+#   STRBASE addresses that are string bases in Table 45 but are served by STR.
+#
+# Multi-word values are big-endian: the lowest address holds the most
+# significant bytes / the first characters.
+#
+# GenICam (`gc:` on a row, `genicam:` below).  A row with `gc:` is a feature
+# of the XML; a row without it is not.  Keys, all optional:
+#   feature         SFNC feature name (default: the row's name); its register
+#                   node is <feature>Reg
+#   type            Integer | Enumeration | Command | String | Boolean
+#                   (default: String for STR / NVSTR, Command for access: WO,
+#                   Enumeration when `allowed` is a mapping, else Integer)
+#   category        the category node that lists it (see genicam.categories)
+#   description, tooltip, display, visibility (Beginner / Expert / Guru),
+#   representation (Linear / HexNumber / ...), unit, streamable (yes / no),
+#   namespace       Standard / Custom (default: Standard for bootstrap and
+#                   device rows, Custom for manufacturer words)
+#   selects         features this selector selects (<pSelected>)
+#   nocache         the register is live (a counter): <Cachable>NoCache
+# Min / Max / Inc / entries are not repeated here: they are the row's
+# min / max / multiple / allowed.  Register access mode, length, address,
+# port, sign and endianness (§10.3.3: big-endian) follow from the row.
+# =============================================================================
+
+module: cxp_ctrl_bootstrap_regs
+
+genicam:
+  vendor: AcmeCXP                       # VendorName = DeviceVendorName
+  model: CamModel                       # ModelName  = DeviceModelName
+  tooltip: CoaXPress 1.1.1 device IP with a test-pattern image source
+  standard_namespace: None              # GenApi 1.1 knows None/IIDC/GEV/CL/USB only
+  schema: {major: 1, minor: 1, subminor: 0}   # GenApi schema -> XmlSchemaVersion
+  version: {major: 0, minor: 1, subminor: 0}  # this file   -> XmlVersion
+  product_guid: 7fe0297a-3bb1-429a-8d38-f20b77eb63d9
+  # VersionGuid is derived from the file's content (UUIDv5 under
+  # product_guid), so two different files never share one.
+  port: Device                          # the one <Port> every register reads through
+  # The category tree, in order.  A category lists the features whose
+  # gc.category names it (in map order), then its `children`.
+  categories:
+    - {name: Root, description: Device root category,
+       children: [DeviceControl, ImageFormatControl, AcquisitionControl, TransportLayerControl]}
+    - {name: DeviceControl, description: Device identification}
+    - {name: ImageFormatControl, description: "Image geometry, ROI offset and pixel format"}
+    - {name: AcquisitionControl, description: Acquisition start/stop and test-pattern run control}
+    - {name: TransportLayerControl, description: CXP stream packetisation and stream metadata,
+       children: [LinkTest]}
+    - {name: LinkTest, namespace: Custom,
+       description: Connection-test mode enable and per-connection counters}
+
+xml:
+  file: src/regmap/genicam/cxp_camera.xml  # the GenICam description served (generated)
+  name: cxp_camera.xml                  # file name in the XmlUrl string
+  blob_addr: 0x90000000                 # full address of the ROM
+  url_addr: 0x6000                      # XmlUrlAddress (§10.3.11)
+  mem: src/rtl/gen/cxp_camera_xml.mem       # $readmemh image; every build loads this one
+
+mfr:
+  base: 0x10000                         # manufacturer-specific window
+  words: 32
+
+registers:
+  # ---- Bootstrap: Support group (§10.3.5-12) --------------------------------
+  - {name: Standard,            addr: 0x0000, kind: RO, value: 0xC0A79AE5}
+  - {name: Revision,            addr: 0x0004, kind: RO, value: 0x00010001,
+     gc: {category: DeviceControl, visibility: Expert, representation: HexNumber,
+          description: "CoaXPress revision: major in [31:16], minor in [15:0] (§10.3.6)"}}
+  - {name: XmlManifestSize,     addr: 0x0008, kind: RO, value: 1}
+  - {name: XmlManifestSelector, addr: 0x000C, kind: RW, reg: xml_selector_q,
+     reset: 0, conn_reset: 0, max: 0}
+  # Both from genicam.schema / genicam.version.
+  - {name: XmlVersion,          addr: 0x0010, kind: RO, value: xml.version,
+     gc: {category: DeviceControl, visibility: Expert, representation: HexNumber,
+          description: Version of this XML file (§10.3.9)}}
+  - {name: XmlSchemaVersion,    addr: 0x0014, kind: RO, value: xml.schema_version}
+  - {name: XmlUrlAddress,       addr: 0x0018, kind: RO, value: xml.url_addr}
+  - {name: Iidc2Address,        addr: 0x001C, kind: RO, value: 0}
+
+  # ---- Bootstrap: GenICam strings (§10.3.13-18) + XmlUrl -------------------
+  - {name: XmlUrl,              addr: xml.url_addr, kind: STR, len: 64, value: xml.url}
+  - {name: DeviceVendorName,    addr: 0x2000, kind: STR, len: 32, value: genicam.vendor,
+     gc: {category: DeviceControl, description: Camera vendor name (§10.3.13)}}
+  - {name: DeviceModelName,     addr: 0x2020, kind: STR, len: 32, value: genicam.model,
+     gc: {category: DeviceControl, description: Camera model name (§10.3.14)}}
+  - {name: DeviceManufacturerInfo, addr: 0x2040, kind: STR, len: 48, value: "AcmeCXP camera",
+     gc: {category: DeviceControl, description: Manufacturer information (§10.3.15)}}
+  - {name: DeviceVersion,       addr: 0x2070, kind: STR, len: 32, value: "1.1.1",
+     gc: {category: DeviceControl, description: Device version (§10.3.16)}}
+  - {name: DeviceSerialNumber,  addr: 0x20B0, kind: STR, len: 16, value: "SN-0001",
+     gc: {category: DeviceControl, description: Device serial number (§10.3.17)}}
+  - {name: DeviceUserID,        addr: 0x20C0, kind: NVSTR, len: 16, reg: device_user_id_q,
+     nv: device_user_id_nv_i, out: ctl_device_user_id_o,
+     gc: {category: DeviceControl, description: User-programmable device identifier (§10.3.18)}}
+
+  # ---- Bootstrap: CXP group (§10.3.28-41) -----------------------------------
+  # §10.3.28: bit 0 is the only bit.
+  - {name: ConnectionReset,     addr: 0x4000, kind: CRST, reg: conn_reset_q,
+     out: ctl_connection_reset_pulse_o, max: 1}
+  - {name: DeviceConnectionID,  addr: 0x4004, kind: RO, value: 0, out: ctl_device_connection_id_o}
+  - {name: MasterHostConnectionID, addr: 0x4008, kind: RW, reg: master_host_conn_id_q,
+     reset: 0, conn_reset: 0, out: ctl_master_host_connection_id_o}
+  # Table 21 framing (6 words) plus the 64-word command buffer: 280 bytes.
+  - {name: ControlPacketSizeMax, addr: 0x400C, kind: RO, value: 0x118}
+  # Bytes of the whole packet (§10.3.32), a multiple of 4.  0 means "not
+  # initialized": no stream packet is sent (Table 44).  Power-up executes
+  # a connection reset (§10.3.28), so it powers up at 0 too.
+  - {name: StreamPacketSizeMax, addr: 0x4010, kind: RW, reg: stream_pkt_dsize_q,
+     reset: 0, conn_reset: 0, out: ctl_stream_pkt_dsize_o,
+     multiple: 4,
+     gc: {category: TransportLayerControl, visibility: Expert,
+          description: "StreamPacketSizeMax (§10.3.32): bytes of the whole stream packet,
+            a multiple of 4.  0 = not initialised: no stream packet is sent."}}
+  # One connection at the one supported rate: the default is the only value.
+  - {name: ConnectionConfig,    addr: 0x4014, kind: RW, reg: conn_config_q,
+     reset: 0x00010028, conn_reset: 0x00010028, allowed: [0x00010028],
+     wr_pulse: ctl_connection_config_wr_o, out: ctl_connection_config_o,
+     gc: {category: DeviceControl, visibility: Expert, representation: HexNumber,
+          description: Connections and bit rate in use (§10.3.33)}}
+  - {name: ConnectionConfigDefault, addr: 0x4018, kind: RO, value: 0x00010028,
+     gc: {category: DeviceControl, visibility: Expert, representation: HexNumber,
+          description: Connections and bit rate after discovery (§10.3.34)}}
+  # §10.3.35: 0 or 1.
+  - {name: TestMode,            addr: 0x401C, kind: RW, reg: test_mode_q,
+     reset: 0, conn_reset: 0, out: ctl_test_mode_o, bits: 1, max: 1,
+     gc: {category: LinkTest, visibility: Expert,
+          description: "Connection-test mode (§10.3.35): 0 = normal traffic; 1 = the
+            device sends test packets (§8.7) and no stream traffic.  Other values
+            are refused."}}
+  # §10.3.36: a selector with no connection behind it is refused.
+  - {name: TestErrorCountSelector, addr: 0x4020, kind: RW, reg: test_err_cnt_sel_q,
+     reset: 0, conn_reset: 0, max: links,
+     gc: {category: LinkTest, visibility: Expert,
+          selects: [TestErrorCount, TestPacketCountTx, TestPacketCountRx],
+          description: Connection the test counters report (§10.3.36)}}
+  - {name: TestErrorCount,      addr: 0x4024, kind: CNT, len: 4, in: test_err_count_i,
+     out: ctl_test_err_count_clr_o,
+     gc: {category: LinkTest, visibility: Expert, nocache: yes,
+          description: "Link-test word errors of the selected connection (§10.3.37);
+            writing 0 clears it, and so does a ConnectionReset."}}
+  - {name: TestPacketCountTx,   addr: 0x4028, kind: CNT, len: 8, in: test_pkt_count_tx_i,
+     out: ctl_test_pkt_tx_clr_o,
+     gc: {category: LinkTest, visibility: Expert, nocache: yes,
+          description: "Link-test packets sent on the selected connection (§10.3.38),
+            64-bit; writing 0 clears it."}}
+  - {name: TestPacketCountRx,   addr: 0x4030, kind: CNT, len: 8, in: test_pkt_count_rx_i,
+     out: ctl_test_pkt_rx_clr_o,
+     gc: {category: LinkTest, visibility: Expert, nocache: yes,
+          description: "Link-test packets received on the selected connection (§10.3.39),
+            64-bit; writing 0 clears it."}}
+  - {name: ElectricalComplianceTest, addr: 0x4038, kind: RW, reg: ecompl_test_q,
+     reset: 0, conn_reset: 0}
+  - {name: HsUpconnection,      addr: 0x403C, kind: RO, value: 0}
+  # §10.3.27: Image<n>StreamIDAddress reads 0 for every stream beyond the first.
+  - {name: ImageNStreamIdAddress, addr: 0x3020, kind: ZERO, len: 0x0FE0}
+
+# §10.3.19-27 use-case features (Table 47).  `slot` is the Table 45
+# register that holds the feature's address (read-only); `alias` is that
+# address in the manufacturer window, where the feature is a R/W register.
+# `wr_pulse` is an output pulsed one cycle after every write; `reset_param`
+# a module parameter that overrides the power-on value; `min` / `max` /
+# `allowed` as for the bootstrap rows; `access: WO` makes a read 0x44 (and
+# the feature a Command writing 1, §11.2.1.4-5).
+# A ConnectionReset leaves them alone.
+device:
+  - {name: Width,            slot: 0x3000, alias: 0x10000, reg: width_q,        reset: 640, out: ctl_tpg_width_o,
+     min: 1, max: 4096,
+     gc: {category: ImageFormatControl, description: Image width in pixels}}
+  - {name: Height,           slot: 0x3004, alias: 0x10004, reg: height_q,       reset: 480, out: ctl_tpg_height_o,
+     min: 1, max: 4096,
+     gc: {category: ImageFormatControl, description: Image height in pixels}}
+  - {name: AcquisitionMode,  slot: 0x3008, alias: 0x10040, reg: acq_mode_q,     reset: 0,   out: ctl_acquisition_mode_o,
+     allowed: {Continuous: 0},                                  # §11.2.1.3
+     gc: {category: AcquisitionControl,
+          description: "Acquisition mode: frames stream until AcquisitionStop"}}
+  - {name: AcquisitionStart, slot: 0x300C, alias: 0x10010, reg: acq_start_q,    reset: 0,   out: ctl_acquisition_start_o,
+     wr_pulse: ctl_acquisition_start_wr_o, access: WO,
+     gc: {category: AcquisitionControl, description: Begin streaming frames}}
+  - {name: AcquisitionStop,  slot: 0x3010, alias: 0x10014, reg: acq_stop_q,     reset: 0,   out: ctl_acquisition_stop_o,
+     wr_pulse: ctl_acquisition_stop_wr_o, access: WO,
+     gc: {category: AcquisitionControl, description: Stop streaming frames}}
+  # Powers up at the device's own format (an entry of the enumeration).
+  # §11.2.1.6: the value is the GenICam PFNC value; the device maps it to
+  # the Table 25 PixelF code it sends (cxp_pkg::pfnc_to_pixelf).
+  - {name: PixelFormat,      slot: 0x3014, alias: 0x10008, reg: pixel_format_q, reset: 0x01080001, out: ctl_pixel_format_o,
+     reset_param: p_PIXEL_FORMAT_RESET,
+     allowed: {Mono8: 0x01080001, Mono10: 0x01100003, Mono12: 0x01100005, Mono14: 0x01100025,
+               Mono16: 0x01100007},  # PFNC; PixelF 0x0101 .. 0x0105 (Table 25)
+     gc: {category: ImageFormatControl,
+          description: "Pixel format: GenICam PFNC value (§11.2.1.6); the image header carries
+            the matching Table 25 PixelF code"}}
+  # The TPG sends Geometry_1X_1Y only.
+  - {name: TapGeometry,      slot: 0x3018, alias: 0x10028, reg: tap_geometry_q, reset: 0,   out: ctl_tap_geometry_o,
+     allowed: {Geometry_1X_1Y: 0},
+     gc: {feature: DeviceTapGeometry, category: TransportLayerControl,
+          description: Tap geometry of the image stream (TapG in the image header)}}
+  - {name: Image1StreamID,   slot: 0x301C, alias: 0x1002C, reg: stream_id_q,    reset: 1,   out: ctl_image1_stream_id_o,
+     reset_param: p_IMAGE1_STREAM_ID_RESET, max: 0xFF,    # one byte (Table 38)
+     gc: {category: TransportLayerControl,
+          description: StreamID of the image stream (stream packets and image header)}}
+
+# Manufacturer-window words that are not device aliases: host writes
+# round-trip; TestPattern, FrameCount, TpgRun, OffsetX/Y, SourceTag and
+# StreamFlags drive the datapath.
+manufacturer:
+  - {name: MfrReserved1, offset: 0x0C, reg: mfr_reserved1_q}
+  - {name: FrameCount,   offset: 0x18, reg: frame_count_q, out: ctl_frame_count_o, max: 0xFFFF,
+     gc: {category: AcquisitionControl, description: Frames emitted per AcquisitionStart (0 = 1)}}
+  - {name: TestPattern,  offset: 0x1C, reg: test_pattern_q, out: ctl_test_pattern_o,
+     allowed: {Gradient: 0, Bars: 1, Flat: 2, GreyBars: 3},
+     gc: {category: ImageFormatControl, description: Built-in test pattern generator}}
+  - {name: OffsetX,      offset: 0x20, reg: offset_x_q, out: ctl_offset_x_o, max: 4095,
+     gc: {category: ImageFormatControl, namespace: Standard, description: ROI horizontal offset}}
+  - {name: OffsetY,      offset: 0x24, reg: offset_y_q, out: ctl_offset_y_o, max: 4095,
+     gc: {category: ImageFormatControl, namespace: Standard, description: ROI vertical offset}}
+  - {name: SourceTag,    offset: 0x30, reg: source_tag_q, out: ctl_source_tag_o, max: 0xFFFF,
+     gc: {category: TransportLayerControl,
+          description: SourceTag of the next image; it then increments per image}}
+  - {name: StreamFlags,  offset: 0x34, reg: stream_flags_q, out: ctl_stream_flags_o, max: 0xFF,
+     gc: {category: TransportLayerControl, description: Stream header flag byte}}
+  - {name: TpgRun,       offset: 0x38, reg: tpg_run_q, out: ctl_tpg_run_o,
+     reset: 1, max: 1,    # Continuous: AcquisitionStart streams until AcquisitionStop
+     gc: {category: AcquisitionControl,
+          description: "Test-pattern free-run: 1 streams frames until AcquisitionStop;
+            0 sends the FrameCount burst"}}
+  - {name: MfrReserved2, offset: 0x3C, reg: mfr_reserved2_q}

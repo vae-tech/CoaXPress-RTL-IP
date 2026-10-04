@@ -1,0 +1,93 @@
+`verilator_config
+// =============================================================================
+// cxp_ip.vlt — reviewed lint waivers for `make lint` (repo-root Makefile).
+//
+// Lint runs `verilator --lint-only -Wall` with UNUSEDSIGNAL and PINMISSING
+// on.  Every waiver below is a known, documented item; each names the
+// module-note finding (docs/design/modules) it belongs to.  When the finding is fixed, delete its
+// waivers — a stale waiver hides nothing, but a new warning fails lint.
+//
+// Do not add inline `lint_off` sinks in RTL; waive here instead so the
+// list of unconsumed signals stays in one reviewable place.
+// =============================================================================
+
+// ---- Packages: shared constants are imported everywhere, used anywhere -----
+lint_off -rule UNUSEDPARAM -file "*/cxp_pkg.sv"
+lint_off -rule UNUSEDPARAM -file "*/cxp_regmap_pkg.sv"
+
+// ---- Known unconsumed outputs (the "unconsumed side-effect" class) ---------
+// Ingress metadata capture pulse unconsumed: the packer takes the latched
+// metadata with the SOF pixel itself (cxp_app_pixel_ingress.md).
+lint_off -rule UNUSEDSIGNAL -file "*/cxp_app_domain.sv" -match "*'ing_meta_valid'*"
+// Packer's per-word eol / lane flags discarded: the stream words need
+// only the frame / line starts and the image's last word.
+lint_off -rule UNUSEDSIGNAL -file "*/cxp_app_domain.sv" -match "*'pk_word_eol'*"
+lint_off -rule UNUSEDSIGNAL -file "*/cxp_app_domain.sv" -match "*'pk_word_lane_vld'*"
+// Passed but unused input (cxp_ctrl_cmd_parser.md).
+lint_off -rule UNUSEDSIGNAL -file "*/cxp_ctrl_cmd_parser.sv" -match "*'long_kmask_i'*"
+
+// ---- Optional outputs of the shared packet blocks -------------------------
+// cxp_tx_pkt_framer / cxp_tx_short_pkt serve several callers; each leaves open
+// the status outputs it has no use for.
+lint_off -rule PINCONNECTEMPTY -file "*/cxp_tx_ctrl_ack.sv"   -match "*'pl_ready_o'*"
+lint_off -rule PINCONNECTEMPTY -file "*/cxp_tx_ctrl_ack.sv"   -match "*'done_o'*"
+lint_off -rule PINCONNECTEMPTY -file "*/cxp_tx_stream_pkt.sv" -match "*'data_*_o'*"
+lint_off -rule PINCONNECTEMPTY -file "*/cxp_tx_linktest.sv"   -match "*'busy_o'*"
+lint_off -rule PINCONNECTEMPTY -file "*/cxp_tx_linktest.sv"   -match "*'data_*_o'*"
+lint_off -rule PINCONNECTEMPTY -file "*/cxp_tx_trigger_hs.sv" -match "*'busy_o'*"
+lint_off -rule PINCONNECTEMPTY -file "*/cxp_tx_io_ack.sv"     -match "*'start_o'*"
+lint_off -rule PINCONNECTEMPTY -file "*/cxp_tx_io_ack.sv"     -match "*'busy_o'*"
+// The Table 15 Delay characters are decoded on their own: no RD chain.
+lint_off -rule PINCONNECTEMPTY -file "*/cxp_rx_trigger_lspd.sv" -match "*'rd_out_o'*"
+
+// ---- cxp_device_top: outputs with no consumer yet ------------------------
+// Error / debug pulses of the link (the status struct's pulses and the
+// sensor's framing pulses), and register values the datapath does not act
+// on yet (AcquisitionStart/Stop values and AcquisitionMode,
+// MasterHostConnectionID, DeviceConnectionID, ConnectionConfig;
+// cxp_ctrl_bootstrap_regs.md).
+lint_off -rule PINCONNECTEMPTY -file "*/cxp_device_top.sv" -match "*'sb_*'*"
+lint_off -rule UNUSEDSIGNAL -file "*/cxp_device_top.sv" -match "*'status'*"
+lint_off -rule PINCONNECTEMPTY -file "*/cxp_device_top.sv" -match "*'ctl_*'*"
+// With p_USER_SIZE = 0 (the lint build) the executor has no APB bridge:
+// its APB inputs and the bridge request nets are not read
+// (cxp_ctrl_bus_master.md).
+lint_off -rule UNUSEDSIGNAL -file "*/cxp_ctrl_bus_master.sv" -match "*'apb_p*_i'*"
+lint_off -rule UNUSEDSIGNAL -file "*/cxp_ctrl_bus_master.sv" -match "*'usr_req'*"
+lint_off -rule UNUSEDSIGNAL -file "*/cxp_ctrl_bus_master.sv" -match "*'usr_abort'*"
+
+// ---- Intentional partial-bit use -----------------------------------------
+// The executing command keeps the whole record; the Size's upper bytes
+// and the parser's code (0 once executing) are not read.
+lint_off -rule UNUSEDSIGNAL -file "*/cxp_ctrl_bus_master.sv" -match "*'cur_q'*"
+// The long word's SOP / EOP marks are the arbiter's business; the inserter
+// only sends the word.
+lint_off -rule UNUSEDSIGNAL -file "*/cxp_tx_inserter.sv" -match "*'long_i'*"
+// 32-bit register values feeding narrower configuration inputs.
+lint_off -rule UNUSEDSIGNAL -file "*/cxp_device_top.sv" -match "*'reg_*'*"
+// A line marker carries the form, Xsize, Xoffs and DsizeL of the frame only.
+lint_off -rule UNUSEDSIGNAL -file "*/cxp_app_line_marker.sv" -match "*'meta_i'*"
+// Shift/assembly registers: the bit shifted out / the lanes overwritten.
+lint_off -rule UNUSEDSIGNAL -file "*/cxp_rx_lspd_sampler.sv" -match "*'bit_sr_q'*"
+lint_off -rule UNUSEDSIGNAL -file "*/cxp_rx_lspd_sampler.sv" -match "*'word_asm_q'*"
+lint_off -rule UNUSEDSIGNAL -file "*/cxp_rx_lspd_sampler.sv" -match "*'flip_asm_q'*"
+
+// ---- The style guide compiles as its own top ----------------------------
+// docs/style/rtl_coding_style.sv keeps its name; its module is cxp_style_example.
+lint_off -rule DECLFILENAME -file "*/rtl_coding_style.sv"
+
+// ---- Bound SVA checkers (sva) -----------------------------------------
+// One file holds every checker module; their `disable iff` reads the async
+// resets, which Verilator reports on the reset nets of the enclosing top.
+lint_off -rule DECLFILENAME -file "*/cxp_sva.sv"
+lint_off -rule SYNCASYNCNET -file "*" -match "*rst_n*"
+
+// ---- The crossing layer -------------------------------------------------------
+// With p_ASYNC_CLOCKS = 0 no crossing has an rx_clk flop; the extension-link
+// strap is used on rx_clk only (cxp_rx_domain) and does not cross.
+lint_off -rule UNUSEDSIGNAL -file "*/cxp_cdc_layer.sv" -match "*'rx_rst_n'*"
+lint_off -rule UNUSEDSIGNAL -file "*/cxp_cdc_layer.sv" -match "*'cfg_i'*"
+
+// ---- Control response in the tx domain ---------------------------------------
+// The ack framer derives N from Size; the timeout flag is rx-side status.
+lint_off -rule UNUSEDSIGNAL -file "*/cxp_tx_domain.sv" -match "*'rsp_i'*"
